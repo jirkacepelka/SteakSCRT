@@ -1,0 +1,30 @@
+{
+  "name": "secret-lst",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Liquid staking protocol for SCRT on Secret Network",
+  "license": "Apache-2.0",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "workspaces": [
+    "keeper",
+    "app",
+    "tests/e2e"
+  ],
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "test:unit": "cargo test --workspace",
+    "lint:rust": "cargo clippy --workspace --all-targets -- -D warnings",
+    "fmt": "cargo fmt --all",
+    "fmt:check": "cargo fmt --all -- --check",
+    "schema": "node scripts/schema.mjs",
+    "devnet:up": "node scripts/devnet.mjs up",
+    "devnet:down": "node scripts/devnet.mjs down",
+    "check": "npm run fmt:check && npm run lint:rust && npm run test:unit"
+  },
+  "devDependencies": {
+    "secretjs": "^1.22.1"
+  }
+}

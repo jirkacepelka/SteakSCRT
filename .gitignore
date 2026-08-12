@@ -1,0 +1,33 @@
+# Rust
+/target
+**/*.rs.bk
+
+# Compiled contract artifacts
+*.wasm
+*.wasm.gz
+/artifacts
+
+# Node
+node_modules/
+.next/
+out/
+dist/
+*.tsbuildinfo
+
+# Environment / secrets — keeper and deploy mnemonics must never be committed
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+/deploy/*.json
+!/deploy/*.example.json
+
+# Devnet runtime state
+/devnet/.state/
+
+# Editors / OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db

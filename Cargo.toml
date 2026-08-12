@@ -1,0 +1,48 @@
+[workspace]
+resolver = "2"
+members = ["contracts/*", "packages/*"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+repository = "https://github.com/secret-lst/secret-lst"
+rust-version = "1.75"
+
+[workspace.dependencies]
+# Secret Network emulates CosmWasm v1.1.9 — there is no CosmWasm 2.x API available.
+# The crates are renamed so contract code can `use cosmwasm_std::...` as usual.
+cosmwasm-std = { package = "secret-cosmwasm-std", version = "1.1.11", features = [
+    "staking",
+] }
+cosmwasm-storage = { package = "secret-cosmwasm-storage", version = "1.1.11" }
+secret-toolkit = { version = "0.10.3", default-features = false, features = [
+    "storage",
+    "serialization",
+    "snip20",
+    "utils",
+    "permit",
+] }
+
+schemars = "0.8.16"
+serde = { version = "1.0", default-features = false, features = ["derive"] }
+thiserror = "1.0"
+
+lst-types = { path = "packages/lst-types" }
+
+# Release profile is what actually ships on-chain.
+#
+# `overflow-checks = true` is deliberate and must never be turned off: this contract
+# does arithmetic on user funds, and a silent wrapping subtraction in the exchange-rate
+# or unbonding-accounting path is the difference between a bug and a drained treasury.
+# The gas cost of the extra checks is negligible next to that.
+[profile.release]
+opt-level = 3
+debug = false
+rpath = false
+lto = true
+debug-assertions = false
+codegen-units = 1
+panic = "abort"
+incremental = false
+overflow-checks = true
