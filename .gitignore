@@ -6,6 +6,7 @@
 *.wasm
 *.wasm.gz
 /artifacts
+/optimized-wasm
 
 # Node
 node_modules/

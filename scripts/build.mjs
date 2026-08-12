@@ -16,12 +16,14 @@
  */
 
 import { execFileSync, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readdirSync, renameSync } from "node:fs";
+import { mkdirSync, readdirSync, renameSync, rmSync, statSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const ARTIFACTS = join(ROOT, "artifacts");
+/** Where the optimizer image drops its output, relative to the mounted contract dir. */
+const STAGING = join(ROOT, "optimized-wasm");
 
 /** Pinned deliberately: bumping this changes the bytecode hash of every contract. */
 const OPTIMIZER_IMAGE = "ghcr.io/scrtlabs/secret-contract-optimizer:1.0.13";
@@ -73,24 +75,35 @@ function build() {
     { stdio: "inherit" },
   );
 
-  const produced = readdirSync(ROOT).filter((f) => f.endsWith(".wasm.gz"));
+  // The image builds with `cargo build --release --lib --locked`, runs `wasm-opt -Oz`
+  // over every cdylib it produced, and gzips the results into ./optimized-wasm.
+  let produced = [];
+  try {
+    produced = readdirSync(STAGING).filter((f) => f.endsWith(".wasm.gz"));
+  } catch {
+    // Staging directory absent entirely — handled by the check below.
+  }
+
   if (produced.length === 0) {
     console.error(
-      "The optimizer produced no .wasm.gz files. Check the build output above.",
+      [
+        "The optimizer produced no .wasm.gz files.",
+        "",
+        "The usual cause is that no workspace member is a cdylib: only crates with",
+        '`crate-type = ["cdylib", "rlib"]` compile to wasm. Check the build output above.',
+      ].join("\n"),
     );
     process.exit(1);
   }
 
   for (const file of produced) {
-    renameSync(join(ROOT, file), join(ARTIFACTS, file));
-    console.log(`  artifacts/${file}`);
+    const dest = join(ARTIFACTS, file);
+    renameSync(join(STAGING, file), dest);
+    const kb = (statSync(dest).size / 1024).toFixed(1);
+    console.log(`  artifacts/${file}  (${kb} KiB)`);
   }
 
-  const checksums = join(ROOT, "checksums.txt");
-  if (existsSync(checksums)) {
-    renameSync(checksums, join(ARTIFACTS, "checksums.txt"));
-    console.log("  artifacts/checksums.txt");
-  }
+  rmSync(STAGING, { recursive: true, force: true });
 }
 
 assertDockerRunning();
