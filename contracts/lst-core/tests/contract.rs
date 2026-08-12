@@ -8,8 +8,9 @@ use cosmwasm_std::testing::{
     mock_dependencies, mock_env, mock_info, MockApi, MockQuerier, MockStorage,
 };
 use cosmwasm_std::{
-    from_binary, to_binary, BankMsg, Coin, ContractResult, CosmosMsg, Decimal, Env, FullDelegation,
-    OwnedDeps, Response, StakingMsg, SystemResult, Uint128, Validator, WasmQuery,
+    from_binary, to_binary, BankMsg, Coin, ContractResult, CosmosMsg, Decimal, DistributionMsg,
+    Env, FullDelegation, OwnedDeps, Response, StakingMsg, SystemResult, Uint128, Validator,
+    WasmQuery,
 };
 
 use lst_core::contract::{execute, instantiate, query};
@@ -1211,6 +1212,213 @@ fn a_withdrawal_does_not_move_the_rate_for_the_holders_who_stayed() {
     deps.querier
         .update_balance(env.contract.address.clone(), vec![]);
     assert_eq!(rate_of(&deps, &env), one, "paid out");
+}
+
+// ---- compounding ----
+
+#[test]
+fn compounding_restakes_rewards_and_takes_the_fee_in_shares() {
+    // Pool is 10 SCRT / 10 SCRT of shares, and 1 SCRT of rewards has accrued.
+    // At 8%, the treasury should end up owning 0.08 SCRT of value.
+    let (mut deps, env) = bootstrapped();
+    set_delegation(&mut deps, &env, V1, SEED, 1_000_000);
+
+    let res = execute(
+        deps.as_mut(),
+        env.clone(),
+        mock_info(USER, &[]),
+        ExecuteMsg::Compound { limit: None },
+    )
+    .unwrap();
+
+    let withdrawn = res.messages.iter().any(|m| {
+        matches!(
+            &m.msg,
+            CosmosMsg::Distribution(DistributionMsg::WithdrawDelegatorReward { .. })
+        )
+    });
+    assert!(withdrawn, "rewards must actually be withdrawn");
+
+    let restaked = res.messages.iter().find_map(|m| match &m.msg {
+        CosmosMsg::Staking(StakingMsg::Delegate { amount, .. }) => Some(amount.amount),
+        _ => None,
+    });
+    assert_eq!(
+        restaked,
+        Some(Uint128::new(1_000_000)),
+        "the whole reward is restaked, fee included — the fee is taken in shares"
+    );
+
+    match from_binary(&res.data.unwrap()).unwrap() {
+        ExecuteAnswer::Compound {
+            rewards_withdrawn,
+            fee_shares_minted,
+            done,
+            ..
+        } => {
+            assert_eq!(rewards_withdrawn, Uint128::new(1_000_000));
+            assert!(done);
+            // 0.08 SCRT of an 11 SCRT pool, priced in shares.
+            assert_eq!(fee_shares_minted, Uint128::new(73_260));
+        }
+        other => panic!("unexpected answer {other:?}"),
+    }
+}
+
+#[test]
+fn compounding_raises_the_exchange_rate_for_holders() {
+    let (mut deps, env) = bootstrapped();
+    set_delegation(&mut deps, &env, V1, SEED, 1_000_000);
+
+    execute(
+        deps.as_mut(),
+        env.clone(),
+        mock_info(USER, &[]),
+        ExecuteMsg::Compound { limit: None },
+    )
+    .unwrap();
+
+    // The staking module now reports the restaked total and no outstanding rewards.
+    set_delegation(&mut deps, &env, V1, SEED + 1_000_000, 0);
+    set_token_supply(&mut deps, SEED + 73_260);
+    execute(
+        deps.as_mut(),
+        env.clone(),
+        mock_info(USER, &[]),
+        ExecuteMsg::Sync { limit: None },
+    )
+    .unwrap();
+
+    let answer: QueryAnswer =
+        from_binary(&query(deps.as_ref(), env, QueryMsg::ExchangeRate {}).unwrap()).unwrap();
+    match answer {
+        QueryAnswer::ExchangeRate { rate, .. } => {
+            // 11 SCRT backing 10.07326 SCRT of shares: holders keep the 92% they are owed.
+            assert!(
+                rate > Uint128::new(1_090_000_000_000_000_000)
+                    && rate < Uint128::new(1_093_000_000_000_000_000),
+                "rate was {rate}"
+            );
+        }
+        other => panic!("unexpected answer {other:?}"),
+    }
+}
+
+#[test]
+fn compounding_with_no_rewards_does_nothing() {
+    let (mut deps, env) = bootstrapped();
+    set_delegation(&mut deps, &env, V1, SEED, 0);
+
+    let res = execute(
+        deps.as_mut(),
+        env,
+        mock_info(USER, &[]),
+        ExecuteMsg::Compound { limit: None },
+    )
+    .unwrap();
+
+    assert!(res.messages.is_empty(), "no rewards, so no messages at all");
+}
+
+#[test]
+fn compounding_is_permissionless() {
+    // A privileged compound would mean a stalled keeper freezes everyone's yield.
+    let (mut deps, env) = bootstrapped();
+    set_delegation(&mut deps, &env, V1, SEED, 500_000);
+
+    assert!(execute(
+        deps.as_mut(),
+        env,
+        mock_info("some_random_address", &[]),
+        ExecuteMsg::Compound { limit: None },
+    )
+    .is_ok());
+}
+
+#[test]
+fn compounding_paginates_over_the_validator_set() {
+    let (mut deps, env) = bootstrapped();
+    set_delegation(&mut deps, &env, V1, SEED, 100_000);
+
+    let res = execute(
+        deps.as_mut(),
+        env.clone(),
+        mock_info(USER, &[]),
+        ExecuteMsg::Compound { limit: Some(1) },
+    )
+    .unwrap();
+
+    match from_binary(&res.data.unwrap()).unwrap() {
+        ExecuteAnswer::Compound {
+            validators_processed,
+            done,
+            ..
+        } => {
+            assert_eq!(validators_processed, 1);
+            assert!(!done, "one of two validators swept");
+        }
+        other => panic!("unexpected answer {other:?}"),
+    }
+
+    let res = execute(
+        deps.as_mut(),
+        env,
+        mock_info(USER, &[]),
+        ExecuteMsg::Compound { limit: Some(1) },
+    )
+    .unwrap();
+
+    match from_binary(&res.data.unwrap()).unwrap() {
+        ExecuteAnswer::Compound { done, .. } => assert!(done, "second call finishes the sweep"),
+        other => panic!("unexpected answer {other:?}"),
+    }
+}
+
+#[test]
+fn a_zero_fee_leaves_the_whole_reward_with_holders() {
+    let mut deps = mock_dependencies();
+    let env = mock_env();
+    let mut p = params();
+    p.performance_fee_bps = 0;
+
+    instantiate(
+        deps.as_mut(),
+        env.clone(),
+        mock_info(ADMIN, &[]),
+        init_msg(p, validator_set()),
+    )
+    .unwrap();
+    deps.querier
+        .update_balance(env.contract.address.clone(), vec![Coin::new(SEED, DENOM)]);
+    execute(
+        deps.as_mut(),
+        env.clone(),
+        mock_info(ADMIN, &[Coin::new(SEED, DENOM)]),
+        ExecuteMsg::Bootstrap {
+            token_address: TOKEN.to_string(),
+            token_code_hash: TOKEN_HASH.to_string(),
+        },
+    )
+    .unwrap();
+    deps.querier
+        .update_balance(env.contract.address.clone(), vec![]);
+    set_token_supply(&mut deps, SEED);
+    set_delegation(&mut deps, &env, V1, SEED, 1_000_000);
+
+    let res = execute(
+        deps.as_mut(),
+        env,
+        mock_info(USER, &[]),
+        ExecuteMsg::Compound { limit: None },
+    )
+    .unwrap();
+
+    match from_binary(&res.data.unwrap()).unwrap() {
+        ExecuteAnswer::Compound {
+            fee_shares_minted, ..
+        } => assert!(fee_shares_minted.is_zero()),
+        other => panic!("unexpected answer {other:?}"),
+    }
 }
 
 #[test]

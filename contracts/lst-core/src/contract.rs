@@ -2,7 +2,7 @@
 
 use cosmwasm_std::{
     entry_point, from_binary, to_binary, Addr, BankMsg, Binary, Coin, CosmosMsg, Deps, DepsMut,
-    Env, MessageInfo, Response, StakingMsg, StdError, StdResult, Storage, Uint128,
+    DistributionMsg, Env, MessageInfo, Response, StakingMsg, StdError, StdResult, Storage, Uint128,
 };
 
 use lst_types::core::msg::{
@@ -30,6 +30,12 @@ use crate::{validators, windows};
 /// Each one costs a staking query, and the block gas limit is the binding constraint, so
 /// sweeping a large set has to be spread over several transactions.
 const DEFAULT_SYNC_LIMIT: u32 = 5;
+
+/// Validators compounded per `Compound` call by default.
+///
+/// Lower than the sync limit: compounding does more per validator — a query, a reward
+/// withdrawal and, at the end, a delegation and a mint.
+const DEFAULT_COMPOUND_LIMIT: u32 = 3;
 
 /// Smallest accepted bootstrap seed, in uscrt.
 ///
@@ -112,6 +118,7 @@ pub fn execute(
         }
         ExecuteMsg::AdvanceWindow {} => execute_advance_window(deps, env),
         ExecuteMsg::CollectMatured { limit } => execute_collect_matured(deps, env, limit),
+        ExecuteMsg::Compound { limit } => execute_compound(deps, env, limit),
         ExecuteMsg::Sync { limit } => execute_sync(deps, env, limit),
         ExecuteMsg::SetPaused { paused } => execute_set_paused(deps, info, paused),
         _ => Err(ContractError::Std(StdError::generic_err(
@@ -642,6 +649,146 @@ fn execute_sync(deps: DepsMut, env: Env, limit: Option<u32>) -> Result<Response,
         .add_attribute("action", "sync")
         .set_data(to_binary(&ExecuteAnswer::Sync {
             total_bonded,
+            validators_processed: processed,
+            done,
+        })?))
+}
+
+/// Withdraw staking rewards, take the protocol's cut, and restake the rest.
+///
+/// Permissionless, like `Sync`: the keeper runs it on a schedule, but nothing about it
+/// needs to be privileged, and making it privileged would mean a stalled keeper freezes
+/// everyone's yield.
+///
+/// Paginated over the validator set. Each validator costs a staking query, a withdraw and
+/// a delegate, and sweeping a large set in one transaction would risk the block gas limit
+/// — the failure mode being that compounding stops working exactly when the protocol has
+/// grown enough to need it.
+fn execute_compound(
+    deps: DepsMut,
+    env: Env,
+    limit: Option<u32>,
+) -> Result<Response, ContractError> {
+    let config = CONFIG.load(deps.storage)?;
+    let mut set = VALIDATORS.load(deps.storage)?;
+    if set.is_empty() {
+        return Err(ContractError::EmptyValidatorSet);
+    }
+
+    let cursor = SYNC_CURSOR.may_load(deps.storage)?.unwrap_or(0) as usize;
+    let limit = limit.unwrap_or(DEFAULT_COMPOUND_LIMIT).max(1) as usize;
+    let end = (cursor + limit).min(set.len());
+
+    let totals_before = TOTALS.load(deps.storage)?;
+    let pool_before = pool_totals(
+        deps.as_ref(),
+        &env,
+        &config,
+        &totals_before,
+        Uint128::zero(),
+    )?;
+
+    let mut messages: Vec<CosmosMsg> = Vec::new();
+    let mut harvested = Uint128::zero();
+
+    for idx in cursor..end {
+        // Re-read rather than trusting the cached figure: rewards accrue every block, and
+        // withdrawing sends whatever is actually there, not what was cached.
+        let delegation = deps
+            .querier
+            .query_delegation(&env.contract.address, &set[idx].address)?;
+
+        let rewards = delegation
+            .as_ref()
+            .and_then(|d| {
+                d.accumulated_rewards
+                    .iter()
+                    .find(|c| c.denom == config.bonded_denom)
+            })
+            .map(|c| c.amount)
+            .unwrap_or_else(Uint128::zero);
+
+        if let Some(d) = &delegation {
+            set[idx].bonded = d.amount.amount;
+        }
+        set[idx].pending_rewards = Uint128::zero();
+
+        if rewards.is_zero() {
+            continue;
+        }
+
+        harvested += rewards;
+        messages.push(CosmosMsg::Distribution(
+            DistributionMsg::WithdrawDelegatorReward {
+                validator: set[idx].address.clone(),
+            },
+        ));
+    }
+
+    // Restake everything harvested, spread by the same underweight rule deposits use, so
+    // compounding pulls the set toward its target weights instead of entrenching drift.
+    let mut fee_shares = Uint128::zero();
+    if !harvested.is_zero() {
+        let target = validators::select_for_delegation(&set, harvested)?;
+        set[target].bonded += harvested;
+
+        messages.push(delegate_msg(
+            &set[target].address,
+            &config.bonded_denom,
+            harvested,
+        ));
+
+        // The fee is taken as freshly minted shares rather than withdrawn SCRT: the whole
+        // reward stays staked and no bank transfer is needed per cycle. Minting must be
+        // priced against the pool *before* the rewards land, which is why `pool_before`
+        // is captured at the top.
+        fee_shares = math::fee_shares_for_rewards(
+            harvested,
+            config.params.performance_fee_bps,
+            &pool_before,
+        )?;
+
+        if !fee_shares.is_zero() {
+            let token = config.token()?;
+            messages.push(
+                TokenExecuteMsg::Mint {
+                    recipient: config.treasury.to_string(),
+                    amount: fee_shares,
+                    memo: Some("performance fee".to_string()),
+                    padding: None,
+                }
+                .to_cosmos_msg(
+                    token.code_hash.clone(),
+                    token.address.to_string(),
+                    None,
+                )?,
+            );
+        }
+    }
+
+    let done = end >= set.len();
+    let processed = (end - cursor) as u32;
+
+    VALIDATORS.save(deps.storage, &set)?;
+    SYNC_CURSOR.save(deps.storage, &(if done { 0 } else { end as u32 }))?;
+
+    let mut totals = TOTALS.load(deps.storage)?;
+    totals.total_bonded = validators::total_bonded(&set);
+    totals.pending_rewards = set
+        .iter()
+        .fold(Uint128::zero(), |acc, v| acc + v.pending_rewards);
+    totals.total_supply += fee_shares;
+    if done {
+        totals.last_sync_time = env.block.time.seconds();
+    }
+    TOTALS.save(deps.storage, &totals)?;
+
+    Ok(Response::new()
+        .add_messages(messages)
+        .add_attribute("action", "compound")
+        .set_data(to_binary(&ExecuteAnswer::Compound {
+            rewards_withdrawn: harvested,
+            fee_shares_minted: fee_shares,
             validators_processed: processed,
             done,
         })?))
