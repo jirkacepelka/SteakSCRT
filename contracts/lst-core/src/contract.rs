@@ -691,12 +691,12 @@ fn execute_compound(
     let mut messages: Vec<CosmosMsg> = Vec::new();
     let mut harvested = Uint128::zero();
 
-    for idx in cursor..end {
+    for entry in set.iter_mut().take(end).skip(cursor) {
         // Re-read rather than trusting the cached figure: rewards accrue every block, and
         // withdrawing sends whatever is actually there, not what was cached.
         let delegation = deps
             .querier
-            .query_delegation(&env.contract.address, &set[idx].address)?;
+            .query_delegation(&env.contract.address, &entry.address)?;
 
         let rewards = delegation
             .as_ref()
@@ -709,9 +709,9 @@ fn execute_compound(
             .unwrap_or_else(Uint128::zero);
 
         if let Some(d) = &delegation {
-            set[idx].bonded = d.amount.amount;
+            entry.bonded = d.amount.amount;
         }
-        set[idx].pending_rewards = Uint128::zero();
+        entry.pending_rewards = Uint128::zero();
 
         if rewards.is_zero() {
             continue;
@@ -720,7 +720,7 @@ fn execute_compound(
         harvested += rewards;
         messages.push(CosmosMsg::Distribution(
             DistributionMsg::WithdrawDelegatorReward {
-                validator: set[idx].address.clone(),
+                validator: entry.address.clone(),
             },
         ));
     }
