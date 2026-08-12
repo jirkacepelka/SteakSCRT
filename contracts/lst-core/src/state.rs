@@ -6,6 +6,7 @@
 
 use cosmwasm_std::{Addr, Storage, Uint128};
 use schemars::JsonSchema;
+use secret_toolkit::serialization::Json;
 use secret_toolkit::storage::{AppendStore, Item, Keymap};
 use serde::{Deserialize, Serialize};
 
@@ -30,9 +31,9 @@ pub static CONFIG: Item<Config> = Item::new(KEY_CONFIG);
 /// The validator set is a single vector rather than a map: it holds ten to twenty entries,
 /// and every routine that touches it (selection, sync, rebalancing) iterates the whole
 /// thing anyway.
-pub static VALIDATORS: Item<Vec<ValidatorEntry>> = Item::new(KEY_VALIDATORS);
+pub static VALIDATORS: Item<Vec<ValidatorEntry>, Json> = Item::new(KEY_VALIDATORS);
 pub static TOTALS: Item<TotalsCache> = Item::new(KEY_TOTALS);
-pub static WINDOWS: Keymap<u64, UnbondWindow> = Keymap::new(KEY_WINDOWS);
+pub static WINDOWS: Keymap<u64, UnbondWindow, Json> = Keymap::new(KEY_WINDOWS);
 /// Id of the window currently accepting withdrawal requests.
 pub static OPEN_WINDOW: Item<u64> = Item::new(KEY_OPEN_WINDOW);
 pub static NEXT_WINDOW_ID: Item<u64> = Item::new(KEY_NEXT_WINDOW_ID);

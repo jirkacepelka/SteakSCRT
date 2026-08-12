@@ -84,6 +84,68 @@ function runOptimizer(dir, cacheKey) {
   );
 }
 
+/**
+ * Reject any contract containing floating-point instructions.
+ *
+ * Secret's enclave refuses to instantiate such a module, and the error it gives —
+ * "found floating point operation in module code" — arrives at deployment time, long
+ * after tests have passed. Nothing in `cargo test` or `clippy` can see it, because the
+ * offending code is pulled in by a dependency's serializer rather than written by hand.
+ *
+ * The known trap: `secret-toolkit`'s default Bincode2 storage serializer drags in float
+ * handling as soon as a stored type contains an enum. Switching those items to the Json
+ * serializer avoids it. Checking here turns a confusing deployment failure into a build
+ * failure with a name attached.
+ */
+function assertNoFloatingPoint(dir) {
+  const report = execFileSync(
+    "docker",
+    [
+      "run", "--rm",
+      "-v", `${dir}:/contract`,
+      "--entrypoint", "sh",
+      OPTIMIZER_IMAGE,
+      "-c",
+      // wasm-dis is part of the binaryen toolchain shipped in the optimizer image.
+      'for w in /contract/optimized-wasm/*.wasm.gz; do ' +
+        'n=$(basename "$w" .gz); gunzip -c "$w" > /tmp/$n; ' +
+        'wasm-dis /tmp/$n -o /tmp/x.wat 2>/dev/null; ' +
+        'c=$(grep -cE "\\b(f32|f64)\\.[a-z_]+" /tmp/x.wat || true); ' +
+        'echo "$n $c"; done',
+    ],
+    { encoding: "utf8" },
+  );
+
+  const offenders = report
+    .trim()
+    .split("\n")
+    .filter(Boolean)
+    .map((line) => line.trim().split(/\s+/))
+    .filter(([, count]) => Number(count) > 0);
+
+  if (offenders.length > 0) {
+    console.error("");
+    for (const [name, count] of offenders) {
+      console.error(`${name} contains ${count} floating-point instructions.`);
+    }
+    console.error(
+      [
+        "",
+        "Secret's enclave will refuse to instantiate this contract.",
+        "",
+        "The usual cause is a stored type containing an enum: secret-toolkit's default",
+        "Bincode2 serializer pulls in float handling for those. Give the affected Item or",
+        "Keymap the Json serializer instead, e.g. `Item<Vec<Foo>, Json>`.",
+        "",
+        "To locate it, build without stripping and look for the float-using functions:",
+        "  cargo build --release --lib --target wasm32-unknown-unknown",
+        "  wasm-dis target/wasm32-unknown-unknown/release/<name>.wasm -o out.wat",
+      ].join("\n"),
+    );
+    process.exit(1);
+  }
+}
+
 /** Move whatever the optimizer staged in `dir` into artifacts/. */
 function collect(dir) {
   const staging = join(dir, "optimized-wasm");
@@ -110,6 +172,7 @@ function build() {
 
   console.log(`Building contracts with ${OPTIMIZER_IMAGE} ...`);
   runOptimizer(ROOT, "workspace");
+  assertNoFloatingPoint(ROOT);
   const produced = collect(ROOT);
 
   // The derivative token is the upstream SNIP-20 reference implementation, unmodified.
@@ -118,6 +181,7 @@ function build() {
   if (existsSync(join(TOKEN_DIR, "Cargo.toml"))) {
     console.log("Building the derivative token (vendored SNIP-20) ...");
     runOptimizer(TOKEN_DIR, "token");
+    assertNoFloatingPoint(TOKEN_DIR);
     produced.push(...collect(TOKEN_DIR));
   } else {
     console.warn(
