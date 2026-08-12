@@ -51,7 +51,7 @@ claiming a Secret LST makes staking "anonymous" is overselling it.
 
 ```
 contracts/lst-core     staking engine, unbonding queue, exchange-rate accounting
-contracts/lst-token    the derivative SNIP-20 (fork of scrtlabs/snip20-reference-impl)
+contracts/lst-token    submodule: scrtlabs/snip20-reference-impl @ v1.5.0, unmodified
 contracts/timelock     delayed execution over governance and migrations
 packages/lst-types     shared wire types; source of truth for TypeScript codegen
 keeper/                upkeep bot: compound, advance windows, collect, rebalance
@@ -60,9 +60,38 @@ scripts/               build, schema, devnet, deploy
 devnet/                LocalSecret with a patched genesis for end-to-end tests
 ```
 
+## The derivative token is not ours
+
+`dSCRT` is SCRT Labs' SNIP-20 reference implementation at tag `v1.5.0`, vendored as a
+submodule and built **unmodified**.
+
+We planned to fork it and then found nothing worth changing. Everything the protocol needs
+is already configuration: `public_total_supply` and `enable_mint`/`enable_burn` are
+instantiation flags, and `SetMinters` hands minting rights to `lst-core` after deployment.
+Forking would have meant owning ~5,000 lines of privacy-critical code — delayed write
+buffers, bucketed entry tries, permit handling — for no behavioural gain, and every future
+upstream fix would have become a manual merge.
+
+Two consequences worth knowing:
+
+- The token's admin must be the timelock. A token admin can change minters and halt
+  transfers, so leaving it on a deploy key would be a mint-anything backdoor.
+- After granting `lst-core` minting rights, deployment **removes the deploy key from the
+  minter set**. `SetMinters` replaces the list wholesale, which does both in one call.
+
+A halted token would block new withdrawal *requests*, because those burn dSCRT. It cannot
+block claims on already-matured windows: those pay out native SCRT straight from
+`lst-core` and never touch the token.
+
 ## Development
 
 Requires Rust (stable), Node 20+, and Docker.
+
+Clone with submodules, or initialise them afterwards:
+
+```bash
+git submodule update --init --recursive
+```
 
 ```bash
 npm run check

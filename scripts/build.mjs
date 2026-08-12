@@ -16,14 +16,20 @@
  */
 
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdirSync, readdirSync, renameSync, rmSync, statSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  renameSync,
+  rmSync,
+  statSync,
+} from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const ARTIFACTS = join(ROOT, "artifacts");
-/** Where the optimizer image drops its output, relative to the mounted contract dir. */
-const STAGING = join(ROOT, "optimized-wasm");
+const TOKEN_DIR = join(ROOT, "contracts", "lst-token");
 
 /** Pinned deliberately: bumping this changes the bytecode hash of every contract. */
 const OPTIMIZER_IMAGE = "ghcr.io/scrtlabs/secret-contract-optimizer:1.0.13";
@@ -49,39 +55,78 @@ function assertDockerRunning() {
   }
 }
 
-function build() {
-  mkdirSync(ARTIFACTS, { recursive: true });
-
-  console.log(`Building contracts with ${OPTIMIZER_IMAGE} ...`);
-
-  // The optimizer compiles every cdylib member of the workspace mounted at /contract,
-  // runs wasm-opt -Oz over each, and gzips the result.
-  //
-  // Named volumes keep the registry and target caches across runs; without them every
-  // build re-downloads and re-compiles the full dependency tree.
+/**
+ * Run the optimizer over one cargo project.
+ *
+ * `dir` is mounted at /contract. The image builds with
+ * `cargo build --release --lib --locked`, runs `wasm-opt -Oz` over every cdylib it
+ * produced, and gzips the results into ./optimized-wasm.
+ *
+ * Named volumes keep the registry and target caches across runs; without them every build
+ * re-downloads and re-compiles the full dependency tree. The cache volume is per-project
+ * because the workspace and the vendored token pin different dependency versions.
+ */
+function runOptimizer(dir, cacheKey) {
   execFileSync(
     "docker",
     [
       "run",
       "--rm",
       "-v",
-      `${ROOT}:/contract`,
+      `${dir}:/contract`,
       "-v",
-      "secret_lst_cache:/contract/target",
+      `secret_lst_cache_${cacheKey}:/contract/target`,
       "-v",
       "secret_lst_registry:/usr/local/cargo/registry",
       OPTIMIZER_IMAGE,
     ],
     { stdio: "inherit" },
   );
+}
 
-  // The image builds with `cargo build --release --lib --locked`, runs `wasm-opt -Oz`
-  // over every cdylib it produced, and gzips the results into ./optimized-wasm.
+/** Move whatever the optimizer staged in `dir` into artifacts/. */
+function collect(dir) {
+  const staging = join(dir, "optimized-wasm");
   let produced = [];
   try {
-    produced = readdirSync(STAGING).filter((f) => f.endsWith(".wasm.gz"));
+    produced = readdirSync(staging).filter((f) => f.endsWith(".wasm.gz"));
   } catch {
-    // Staging directory absent entirely — handled by the check below.
+    return [];
+  }
+
+  for (const file of produced) {
+    const dest = join(ARTIFACTS, file);
+    renameSync(join(staging, file), dest);
+    const kb = (statSync(dest).size / 1024).toFixed(1);
+    console.log(`  artifacts/${file}  (${kb} KiB)`);
+  }
+
+  rmSync(staging, { recursive: true, force: true });
+  return produced;
+}
+
+function build() {
+  mkdirSync(ARTIFACTS, { recursive: true });
+
+  console.log(`Building contracts with ${OPTIMIZER_IMAGE} ...`);
+  runOptimizer(ROOT, "workspace");
+  const produced = collect(ROOT);
+
+  // The derivative token is the upstream SNIP-20 reference implementation, unmodified.
+  // It is a separate cargo project with its own pinned dependencies, so it gets its own
+  // optimizer run rather than being pulled into this workspace.
+  if (existsSync(join(TOKEN_DIR, "Cargo.toml"))) {
+    console.log("Building the derivative token (vendored SNIP-20) ...");
+    runOptimizer(TOKEN_DIR, "token");
+    produced.push(...collect(TOKEN_DIR));
+  } else {
+    console.warn(
+      [
+        "",
+        "Skipping the derivative token: contracts/lst-token is empty.",
+        "Initialise the submodule with `git submodule update --init --recursive`.",
+      ].join("\n"),
+    );
   }
 
   if (produced.length === 0) {
@@ -95,15 +140,6 @@ function build() {
     );
     process.exit(1);
   }
-
-  for (const file of produced) {
-    const dest = join(ARTIFACTS, file);
-    renameSync(join(STAGING, file), dest);
-    const kb = (statSync(dest).size / 1024).toFixed(1);
-    console.log(`  artifacts/${file}  (${kb} KiB)`);
-  }
-
-  rmSync(STAGING, { recursive: true, force: true });
 }
 
 assertDockerRunning();

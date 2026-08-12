@@ -1,0 +1,3 @@
+[submodule "contracts/lst-token"]
+	path = contracts/lst-token
+	url = https://github.com/scrtlabs/snip20-reference-impl.git

@@ -1,6 +1,11 @@
 [workspace]
 resolver = "2"
 members = ["contracts/*", "packages/*"]
+# The derivative token is SCRT Labs' SNIP-20 reference implementation, vendored as a
+# submodule at a pinned tag and built standalone. It carries its own dependency versions
+# and release profile, so pulling it into this workspace would silently change how audited
+# code compiles.
+exclude = ["contracts/lst-token"]
 
 [workspace.package]
 version = "0.1.0"
