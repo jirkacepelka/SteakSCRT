@@ -10,5 +10,7 @@
 
 pub mod error;
 pub mod math;
+pub mod state;
+pub mod validators;
 
 pub use error::ContractError;
