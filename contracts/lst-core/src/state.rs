@@ -22,6 +22,7 @@ pub const KEY_WINDOWS: &[u8] = b"windows";
 pub const KEY_OPEN_WINDOW: &[u8] = b"open_window";
 pub const KEY_NEXT_WINDOW_ID: &[u8] = b"next_window_id";
 pub const KEY_SYNC_CURSOR: &[u8] = b"sync_cursor";
+pub const KEY_ACTIVE_WINDOWS: &[u8] = b"active_windows";
 pub const KEY_CLAIMS: &[u8] = b"claims";
 pub const KEY_CLAIM_INDEX: &[u8] = b"claim_index";
 
@@ -37,6 +38,12 @@ pub static OPEN_WINDOW: Item<u64> = Item::new(KEY_OPEN_WINDOW);
 pub static NEXT_WINDOW_ID: Item<u64> = Item::new(KEY_NEXT_WINDOW_ID);
 /// Index into `VALIDATORS` at which the next paginated `Sync` or `Compound` resumes.
 pub static SYNC_CURSOR: Item<u32> = Item::new(KEY_SYNC_CURSOR);
+/// Ids of windows that are unbonding or matured but not yet drained.
+///
+/// A short list — the unbonding pipeline holds at most `ceil(period / window)` entries,
+/// plus however many matured windows still have unclaimed money. Keeping it separate
+/// means `CollectMatured` never has to walk every window ever opened.
+pub static ACTIVE_WINDOWS: Item<Vec<u64>> = Item::new(KEY_ACTIVE_WINDOWS);
 
 /// Per-user claim against a single window, stored under a per-address suffix.
 pub static CLAIMS: Keymap<u64, ClaimRecord> = Keymap::new(KEY_CLAIMS);
@@ -86,13 +93,33 @@ pub struct TotalsCache {
     pub pending_rewards: Uint128,
     /// Mirrored from the token contract at each sync.
     pub total_supply: Uint128,
-    /// SCRT promised to unbonding and matured windows. Held by the contract or in flight
-    /// from the staking module, and excluded from the assets backing the live supply.
-    pub scrt_owed_to_windows: Uint128,
+    /// Owed to the open window. Its SCRT has been priced and its shares burned, but the
+    /// stake is still delegated, so the money is still inside `total_bonded`.
+    pub scrt_owed_open: Uint128,
+    /// Owed to windows whose undelegation is in flight. This SCRT is in neither
+    /// `total_bonded` nor the contract's balance — the staking module is holding it.
+    pub scrt_owed_unbonding: Uint128,
+    /// Owed to matured windows. This SCRT has arrived and is sitting in the balance.
+    pub scrt_owed_matured: Uint128,
     pub last_sync_time: u64,
 }
 
 impl TotalsCache {
+    /// Window liabilities whose SCRT is still counted in `total_bonded` or the balance,
+    /// and which therefore must be subtracted when pricing.
+    ///
+    /// Excludes the in-flight leg on purpose: that SCRT has already left `total_bonded`
+    /// and has not yet reached the balance, so subtracting it would remove the same money
+    /// twice and collapse the rate for the holders who stayed.
+    pub fn owed_backed(&self) -> Uint128 {
+        self.scrt_owed_open + self.scrt_owed_matured
+    }
+
+    /// Everything still owed to withdrawers, across all three phases. Reporting only.
+    pub fn owed_total(&self) -> Uint128 {
+        self.scrt_owed_open + self.scrt_owed_unbonding + self.scrt_owed_matured
+    }
+
     /// Whether the cache is too old to price against.
     pub fn is_stale(&self, now: u64, max_age: u64) -> bool {
         now.saturating_sub(self.last_sync_time) > max_age

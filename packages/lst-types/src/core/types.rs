@@ -93,15 +93,32 @@ pub struct UnbondWindow {
     /// SCRT owed to this window's participants, priced at the exchange rate in effect
     /// when each request was made.
     pub scrt_owed: Uint128,
+    /// SCRT that actually came back from the staking module, set when the window matures.
+    ///
+    /// Normally equal to `scrt_owed`. It is lower when a validator holding this window's
+    /// undelegation was slashed while the unbonding was in flight — the chain returns
+    /// less than was undelegated, and no amount of bookkeeping conjures the difference
+    /// back. Claims are scaled by `scrt_realised / scrt_owed` so the loss is shared
+    /// pro-rata within the window instead of being paid out first-come-first-served.
+    pub scrt_realised: Option<Uint128>,
     /// SCRT already paid out to claimants.
     pub scrt_claimed: Uint128,
+    /// Validators this window undelegated from, recorded so their entry counters can be
+    /// released when it matures.
+    pub validators_used: Vec<String>,
     pub state: WindowState,
 }
 
 impl UnbondWindow {
-    /// SCRT still owed to claimants of this window.
+    /// SCRT this window can actually pay, which is what it received rather than what it
+    /// promised. Falls back to the promise before maturity, when nothing is payable yet.
+    pub fn payable(&self) -> Uint128 {
+        self.scrt_realised.unwrap_or(self.scrt_owed)
+    }
+
+    /// SCRT still to be paid out.
     pub fn outstanding(&self) -> Uint128 {
-        self.scrt_owed.saturating_sub(self.scrt_claimed)
+        self.payable().saturating_sub(self.scrt_claimed)
     }
 }
 

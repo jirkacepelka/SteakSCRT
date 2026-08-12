@@ -13,5 +13,6 @@ pub mod error;
 pub mod math;
 pub mod state;
 pub mod validators;
+pub mod windows;
 
 pub use error::ContractError;

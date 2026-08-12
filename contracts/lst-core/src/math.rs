@@ -43,8 +43,17 @@ pub struct PoolTotals {
     pub bonded: Uint128,
     /// Rewards accrued at the validators but not yet withdrawn.
     pub pending_rewards: Uint128,
-    /// SCRT held by the contract that is neither delegated nor already owed to a window.
-    pub liquid_unallocated: Uint128,
+    /// Everything the contract holds in the staking denom, undeployed principal and
+    /// matured window money alike.
+    pub liquid: Uint128,
+    /// Window liabilities whose SCRT is still inside `bonded` or `liquid`.
+    ///
+    /// Only the open window (its stake has not been undelegated yet) and matured windows
+    /// (their SCRT has arrived in the balance) count. A window that is mid-unbonding is
+    /// deliberately excluded: its SCRT has already left `bonded` and has not yet reached
+    /// `liquid`, so subtracting it would count the same money out twice and drive the
+    /// exchange rate toward zero for the holders who stayed.
+    pub owed_backed: Uint128,
     /// Derivative token supply, mirrored from the token contract.
     pub supply: Uint128,
 }
@@ -52,16 +61,19 @@ pub struct PoolTotals {
 impl PoolTotals {
     /// SCRT backing the outstanding supply.
     ///
-    /// Note that SCRT owed to unbonding windows is *not* included: those tokens were
-    /// already priced and their shares already burned, so counting them again would
-    /// hand a second claim on the same SCRT to the remaining holders.
+    /// Withdrawal requests are priced and their shares burned the moment they are made,
+    /// so the SCRT they claim stops backing the remaining supply immediately — long
+    /// before it physically leaves the contract.
     pub fn assets(&self) -> Result<Uint128, ContractError> {
-        self.bonded
+        let gross = self
+            .bonded
             .checked_add(self.pending_rewards)
-            .and_then(|v| v.checked_add(self.liquid_unallocated))
+            .and_then(|v| v.checked_add(self.liquid))
             .map_err(|_| ContractError::Overflow {
                 context: "pool assets",
-            })
+            })?;
+
+        Ok(gross.saturating_sub(self.owed_backed))
     }
 }
 
@@ -219,7 +231,8 @@ mod tests {
         PoolTotals {
             bonded: Uint128::new(bonded),
             pending_rewards: Uint128::new(rewards),
-            liquid_unallocated: Uint128::new(liquid),
+            liquid: Uint128::new(liquid),
+            owed_backed: Uint128::zero(),
             supply: Uint128::new(supply),
         }
     }
@@ -254,7 +267,7 @@ mod tests {
         let shares = shares_for_deposit(deposit, &t).unwrap();
         // Redeem against the pool as it stands after the deposit lands.
         let after = PoolTotals {
-            liquid_unallocated: t.liquid_unallocated + deposit,
+            liquid: t.liquid + deposit,
             supply: t.supply + shares,
             ..t
         };
@@ -273,7 +286,7 @@ mod tests {
         let deposit = Uint128::new(500_000_000);
         let shares = shares_for_deposit(deposit, &t).unwrap();
         let after = PoolTotals {
-            liquid_unallocated: deposit,
+            liquid: deposit,
             supply: t.supply + shares,
             ..t
         };

@@ -8,13 +8,15 @@ use cosmwasm_std::testing::{
     mock_dependencies, mock_env, mock_info, MockApi, MockQuerier, MockStorage,
 };
 use cosmwasm_std::{
-    from_binary, to_binary, Coin, ContractResult, CosmosMsg, Decimal, Env, FullDelegation,
-    OwnedDeps, StakingMsg, SystemResult, Uint128, Validator, WasmQuery,
+    from_binary, to_binary, BankMsg, Coin, ContractResult, CosmosMsg, Decimal, Env, FullDelegation,
+    OwnedDeps, Response, StakingMsg, SystemResult, Uint128, Validator, WasmQuery,
 };
 
 use lst_core::contract::{execute, instantiate, query};
 use lst_core::error::ContractError;
-use lst_types::core::msg::{ExecuteAnswer, ExecuteMsg, InstantiateMsg, QueryAnswer, QueryMsg};
+use lst_types::core::msg::{
+    ExecuteAnswer, ExecuteMsg, InstantiateMsg, QueryAnswer, QueryMsg, ReceiveHookMsg,
+};
 use lst_types::core::types::{ProtocolParams, ValidatorInit};
 
 const DENOM: &str = "uscrt";
@@ -685,6 +687,530 @@ fn sync_picks_up_accrued_rewards() {
         }
         other => panic!("unexpected answer {other:?}"),
     }
+}
+
+// ---- the unbonding queue ----
+
+const WINDOW: u64 = 5 * DAY;
+const UNBONDING: u64 = 21 * DAY;
+
+/// Drive a withdrawal request as the token contract would.
+fn unbond(deps: &mut Deps, env: &Env, who: &str, shares: u128) -> Result<Response, ContractError> {
+    execute(
+        deps.as_mut(),
+        env.clone(),
+        mock_info(TOKEN, &[]),
+        ExecuteMsg::Receive {
+            sender: who.to_string(),
+            from: who.to_string(),
+            amount: Uint128::new(shares),
+            msg: Some(to_binary(&ReceiveHookMsg::Unbond {}).unwrap()),
+        },
+    )
+}
+
+/// A bootstrapped pool with a 10 SCRT user deposit on top: 20 SCRT backing 20 shares,
+/// of which 10 are the locked seed and 10 belong to USER.
+fn with_user_deposit() -> (Deps, Env) {
+    let (mut deps, env) = bootstrapped();
+    let amount = 10_000_000u128;
+
+    deps.querier
+        .update_balance(env.contract.address.clone(), vec![Coin::new(amount, DENOM)]);
+    execute(
+        deps.as_mut(),
+        env.clone(),
+        mock_info(USER, &[Coin::new(amount, DENOM)]),
+        ExecuteMsg::Deposit {},
+    )
+    .unwrap();
+
+    // Delegated, so nothing is left liquid.
+    deps.querier
+        .update_balance(env.contract.address.clone(), vec![]);
+    set_token_supply(&mut deps, SEED + amount);
+    (deps, env)
+}
+
+#[test]
+fn only_the_token_contract_can_drive_a_withdrawal_request() {
+    // Otherwise anyone could claim to have burned tokens they never held.
+    let (mut deps, env) = with_user_deposit();
+
+    let err = execute(
+        deps.as_mut(),
+        env,
+        mock_info(USER, &[]),
+        ExecuteMsg::Receive {
+            sender: USER.to_string(),
+            from: USER.to_string(),
+            amount: Uint128::new(1_000_000),
+            msg: Some(to_binary(&ReceiveHookMsg::Unbond {}).unwrap()),
+        },
+    )
+    .unwrap_err();
+
+    assert_eq!(err, ContractError::Unauthorized);
+}
+
+#[test]
+fn a_transfer_without_the_unbond_hook_is_rejected() {
+    // A plain Send with no message is an accident, not a withdrawal. Treating it as one
+    // would burn the sender's tokens on a guess.
+    let (mut deps, env) = with_user_deposit();
+
+    let err = execute(
+        deps.as_mut(),
+        env,
+        mock_info(TOKEN, &[]),
+        ExecuteMsg::Receive {
+            sender: USER.to_string(),
+            from: USER.to_string(),
+            amount: Uint128::new(1_000_000),
+            msg: None,
+        },
+    )
+    .unwrap_err();
+
+    assert!(matches!(err, ContractError::Std(_)), "got {err:?}");
+}
+
+#[test]
+fn a_withdrawal_request_burns_the_shares_and_records_a_claim() {
+    let (mut deps, env) = with_user_deposit();
+
+    let res = unbond(&mut deps, &env, USER, 5_000_000).unwrap();
+
+    assert_eq!(res.messages.len(), 1, "one burn message");
+
+    match from_binary(&res.data.unwrap()).unwrap() {
+        ExecuteAnswer::Unbond {
+            window_id,
+            shares_burned,
+            scrt_owed,
+            matures_at_estimate,
+        } => {
+            assert_eq!(window_id, 0);
+            assert_eq!(shares_burned, Uint128::new(5_000_000));
+            // The rate is exactly 1, so 5 shares are worth 5 SCRT.
+            assert_eq!(scrt_owed, Uint128::new(5_000_000));
+            assert_eq!(
+                matures_at_estimate,
+                env.block.time.seconds() + WINDOW + UNBONDING,
+                "the estimate spans the rest of the window plus the unbonding period"
+            );
+        }
+        other => panic!("unexpected answer {other:?}"),
+    }
+}
+
+#[test]
+fn two_withdrawals_in_one_window_merge_into_a_single_claim() {
+    // A second record would overwrite the first and silently lose the earlier money.
+    let (mut deps, mut env) = with_user_deposit();
+
+    unbond(&mut deps, &env, USER, 3_000_000).unwrap();
+    unbond(&mut deps, &env, USER, 2_000_000).unwrap();
+
+    // Close the window and run the request through to a payout.
+    env.block.time = env.block.time.plus_seconds(WINDOW);
+    execute(
+        deps.as_mut(),
+        env.clone(),
+        mock_info(USER, &[]),
+        ExecuteMsg::AdvanceWindow {},
+    )
+    .unwrap();
+
+    env.block.time = env.block.time.plus_seconds(UNBONDING);
+    deps.querier.update_balance(
+        env.contract.address.clone(),
+        vec![Coin::new(5_000_000, DENOM)],
+    );
+    execute(
+        deps.as_mut(),
+        env.clone(),
+        mock_info(USER, &[]),
+        ExecuteMsg::CollectMatured { limit: None },
+    )
+    .unwrap();
+
+    let res = execute(
+        deps.as_mut(),
+        env,
+        mock_info(USER, &[]),
+        ExecuteMsg::ClaimMatured { window_ids: None },
+    )
+    .unwrap();
+
+    match from_binary(&res.data.unwrap()).unwrap() {
+        ExecuteAnswer::ClaimMatured { scrt_claimed, .. } => {
+            assert_eq!(scrt_claimed, Uint128::new(5_000_000), "3 + 2, not just 2");
+        }
+        other => panic!("unexpected answer {other:?}"),
+    }
+}
+
+#[test]
+fn pausing_does_not_trap_withdrawals() {
+    // Pausing stops new money entering a protocol in trouble. Using it to keep money in
+    // would be the opposite of a safety control.
+    let (mut deps, env) = with_user_deposit();
+
+    execute(
+        deps.as_mut(),
+        env.clone(),
+        mock_info(ADMIN, &[]),
+        ExecuteMsg::SetPaused { paused: true },
+    )
+    .unwrap();
+
+    assert!(unbond(&mut deps, &env, USER, 1_000_000).is_ok());
+}
+
+#[test]
+fn a_window_cannot_be_advanced_before_it_closes() {
+    let (mut deps, env) = with_user_deposit();
+    unbond(&mut deps, &env, USER, 1_000_000).unwrap();
+
+    let err = execute(
+        deps.as_mut(),
+        env,
+        mock_info(USER, &[]),
+        ExecuteMsg::AdvanceWindow {},
+    )
+    .unwrap_err();
+
+    assert!(
+        matches!(err, ContractError::WindowNotClosed { .. }),
+        "got {err:?}"
+    );
+}
+
+#[test]
+fn an_unused_window_rolls_forward_without_spending_an_entry_slot() {
+    // A zero-value undelegation every window would burn a slot on every validator for
+    // nothing, which is the exact resource the batching exists to conserve.
+    let (mut deps, mut env) = with_user_deposit();
+    env.block.time = env.block.time.plus_seconds(WINDOW);
+
+    let res = execute(
+        deps.as_mut(),
+        env,
+        mock_info(USER, &[]),
+        ExecuteMsg::AdvanceWindow {},
+    )
+    .unwrap();
+
+    assert!(
+        res.messages.is_empty(),
+        "nothing was withdrawn, so nothing unbonds"
+    );
+
+    match from_binary(&res.data.unwrap()).unwrap() {
+        ExecuteAnswer::AdvanceWindow {
+            closed_window_id,
+            new_window_id,
+            scrt_undelegated,
+        } => {
+            assert_eq!(closed_window_id, 0);
+            assert_eq!(new_window_id, 1);
+            assert!(scrt_undelegated.is_zero());
+        }
+        other => panic!("unexpected answer {other:?}"),
+    }
+}
+
+#[test]
+fn closing_a_used_window_undelegates_and_occupies_an_entry_slot() {
+    let (mut deps, mut env) = with_user_deposit();
+    unbond(&mut deps, &env, USER, 5_000_000).unwrap();
+
+    env.block.time = env.block.time.plus_seconds(WINDOW);
+    let res = execute(
+        deps.as_mut(),
+        env.clone(),
+        mock_info(USER, &[]),
+        ExecuteMsg::AdvanceWindow {},
+    )
+    .unwrap();
+
+    let undelegated: Vec<_> = res
+        .messages
+        .iter()
+        .filter_map(|m| match &m.msg {
+            CosmosMsg::Staking(StakingMsg::Undelegate { validator, amount }) => {
+                Some((validator.clone(), amount.amount))
+            }
+            _ => None,
+        })
+        .collect();
+    // V2 is the one to drain: the seed went to V1 and the user's deposit to V2, leaving
+    // V2 at 10 SCRT against a 40% target of 20 SCRT — the overweight one.
+    assert_eq!(undelegated, vec![(V2.to_string(), Uint128::new(5_000_000))]);
+
+    let answer: QueryAnswer =
+        from_binary(&query(deps.as_ref(), env, QueryMsg::Validators {}).unwrap()).unwrap();
+    match answer {
+        QueryAnswer::Validators { validators } => {
+            let v2 = validators.iter().find(|v| v.address == V2).unwrap();
+            assert_eq!(
+                v2.active_unbond_entries, 1,
+                "the slot stays held until maturity"
+            );
+        }
+        other => panic!("unexpected answer {other:?}"),
+    }
+}
+
+#[test]
+fn claiming_before_maturity_reports_when_the_money_arrives() {
+    let (mut deps, mut env) = with_user_deposit();
+    unbond(&mut deps, &env, USER, 5_000_000).unwrap();
+
+    env.block.time = env.block.time.plus_seconds(WINDOW);
+    execute(
+        deps.as_mut(),
+        env.clone(),
+        mock_info(USER, &[]),
+        ExecuteMsg::AdvanceWindow {},
+    )
+    .unwrap();
+
+    let err = execute(
+        deps.as_mut(),
+        env,
+        mock_info(USER, &[]),
+        ExecuteMsg::ClaimMatured { window_ids: None },
+    )
+    .unwrap_err();
+
+    assert!(
+        matches!(err, ContractError::WindowNotMatured { .. }),
+        "got {err:?}"
+    );
+}
+
+#[test]
+fn the_full_withdrawal_cycle_pays_out_and_frees_the_entry_slot() {
+    let (mut deps, mut env) = with_user_deposit();
+    unbond(&mut deps, &env, USER, 5_000_000).unwrap();
+
+    env.block.time = env.block.time.plus_seconds(WINDOW);
+    execute(
+        deps.as_mut(),
+        env.clone(),
+        mock_info(USER, &[]),
+        ExecuteMsg::AdvanceWindow {},
+    )
+    .unwrap();
+
+    // The chain releases the stake back into the contract's balance.
+    env.block.time = env.block.time.plus_seconds(UNBONDING);
+    deps.querier.update_balance(
+        env.contract.address.clone(),
+        vec![Coin::new(5_000_000, DENOM)],
+    );
+
+    execute(
+        deps.as_mut(),
+        env.clone(),
+        mock_info(USER, &[]),
+        ExecuteMsg::CollectMatured { limit: None },
+    )
+    .unwrap();
+
+    let res = execute(
+        deps.as_mut(),
+        env.clone(),
+        mock_info(USER, &[]),
+        ExecuteMsg::ClaimMatured { window_ids: None },
+    )
+    .unwrap();
+
+    let sent = res.messages.iter().find_map(|m| match &m.msg {
+        CosmosMsg::Bank(BankMsg::Send { to_address, amount }) => {
+            Some((to_address.clone(), amount[0].amount))
+        }
+        _ => None,
+    });
+    assert_eq!(sent, Some((USER.to_string(), Uint128::new(5_000_000))));
+
+    let answer: QueryAnswer =
+        from_binary(&query(deps.as_ref(), env, QueryMsg::Validators {}).unwrap()).unwrap();
+    match answer {
+        QueryAnswer::Validators { validators } => {
+            let v2 = validators.iter().find(|v| v.address == V2).unwrap();
+            assert_eq!(
+                v2.active_unbond_entries, 0,
+                "the slot is released at maturity"
+            );
+        }
+        other => panic!("unexpected answer {other:?}"),
+    }
+}
+
+#[test]
+fn a_claim_cannot_be_paid_twice() {
+    let (mut deps, mut env) = with_user_deposit();
+    unbond(&mut deps, &env, USER, 5_000_000).unwrap();
+
+    env.block.time = env.block.time.plus_seconds(WINDOW);
+    execute(
+        deps.as_mut(),
+        env.clone(),
+        mock_info(USER, &[]),
+        ExecuteMsg::AdvanceWindow {},
+    )
+    .unwrap();
+
+    env.block.time = env.block.time.plus_seconds(UNBONDING);
+    deps.querier.update_balance(
+        env.contract.address.clone(),
+        vec![Coin::new(5_000_000, DENOM)],
+    );
+    execute(
+        deps.as_mut(),
+        env.clone(),
+        mock_info(USER, &[]),
+        ExecuteMsg::CollectMatured { limit: None },
+    )
+    .unwrap();
+    execute(
+        deps.as_mut(),
+        env.clone(),
+        mock_info(USER, &[]),
+        ExecuteMsg::ClaimMatured { window_ids: None },
+    )
+    .unwrap();
+
+    let err = execute(
+        deps.as_mut(),
+        env,
+        mock_info(USER, &[]),
+        ExecuteMsg::ClaimMatured { window_ids: None },
+    )
+    .unwrap_err();
+
+    assert_eq!(err, ContractError::NothingToClaim);
+}
+
+#[test]
+fn a_slashed_unbonding_is_shared_rather_than_paid_first_come_first_served() {
+    // Two users withdraw in the same window; only 80% comes back. Both must take the
+    // haircut. Paying the first in full would make withdrawal a race.
+    let (mut deps, mut env) = with_user_deposit();
+    unbond(&mut deps, &env, USER, 5_000_000).unwrap();
+    unbond(&mut deps, &env, "second_user", 5_000_000).unwrap();
+
+    env.block.time = env.block.time.plus_seconds(WINDOW);
+    execute(
+        deps.as_mut(),
+        env.clone(),
+        mock_info(USER, &[]),
+        ExecuteMsg::AdvanceWindow {},
+    )
+    .unwrap();
+
+    // 10 SCRT was undelegated; the validator was slashed and only 8 comes back.
+    env.block.time = env.block.time.plus_seconds(UNBONDING);
+    deps.querier.update_balance(
+        env.contract.address.clone(),
+        vec![Coin::new(8_000_000, DENOM)],
+    );
+    execute(
+        deps.as_mut(),
+        env.clone(),
+        mock_info(USER, &[]),
+        ExecuteMsg::CollectMatured { limit: None },
+    )
+    .unwrap();
+
+    for who in [USER, "second_user"] {
+        let res = execute(
+            deps.as_mut(),
+            env.clone(),
+            mock_info(who, &[]),
+            ExecuteMsg::ClaimMatured { window_ids: None },
+        )
+        .unwrap();
+
+        match from_binary(&res.data.unwrap()).unwrap() {
+            ExecuteAnswer::ClaimMatured { scrt_claimed, .. } => {
+                assert_eq!(
+                    scrt_claimed,
+                    Uint128::new(4_000_000),
+                    "{who} should take the same 20% haircut"
+                );
+            }
+            other => panic!("unexpected answer {other:?}"),
+        }
+    }
+}
+
+#[test]
+fn a_withdrawal_does_not_move_the_rate_for_the_holders_who_stayed() {
+    // Regression guard. A withdrawal request burns shares immediately but its SCRT leaves
+    // the contract in three stages: still bonded while the window is open, in flight
+    // during unbonding, in the balance once matured. Subtracting the liability in the
+    // wrong stage either inflates the rate for remaining holders (double-counting money
+    // already promised away) or collapses it to zero (subtracting money that has already
+    // left). The rate must sit still at every stage.
+    let (mut deps, mut env) = with_user_deposit();
+
+    let rate_of = |deps: &Deps, env: &Env| -> Uint128 {
+        match from_binary(&query(deps.as_ref(), env.clone(), QueryMsg::ExchangeRate {}).unwrap())
+            .unwrap()
+        {
+            QueryAnswer::ExchangeRate { rate, .. } => rate,
+            other => panic!("unexpected answer {other:?}"),
+        }
+    };
+
+    let one = Uint128::new(1_000_000_000_000_000_000);
+    assert_eq!(rate_of(&deps, &env), one, "before any withdrawal");
+
+    unbond(&mut deps, &env, USER, 5_000_000).unwrap();
+    assert_eq!(
+        rate_of(&deps, &env),
+        one,
+        "request made, stake still bonded"
+    );
+
+    env.block.time = env.block.time.plus_seconds(WINDOW);
+    execute(
+        deps.as_mut(),
+        env.clone(),
+        mock_info(USER, &[]),
+        ExecuteMsg::AdvanceWindow {},
+    )
+    .unwrap();
+    assert_eq!(rate_of(&deps, &env), one, "undelegation in flight");
+
+    env.block.time = env.block.time.plus_seconds(UNBONDING);
+    deps.querier.update_balance(
+        env.contract.address.clone(),
+        vec![Coin::new(5_000_000, DENOM)],
+    );
+    execute(
+        deps.as_mut(),
+        env.clone(),
+        mock_info(USER, &[]),
+        ExecuteMsg::CollectMatured { limit: None },
+    )
+    .unwrap();
+    assert_eq!(rate_of(&deps, &env), one, "money back, awaiting claim");
+
+    execute(
+        deps.as_mut(),
+        env.clone(),
+        mock_info(USER, &[]),
+        ExecuteMsg::ClaimMatured { window_ids: None },
+    )
+    .unwrap();
+    deps.querier
+        .update_balance(env.contract.address.clone(), vec![]);
+    assert_eq!(rate_of(&deps, &env), one, "paid out");
 }
 
 #[test]
