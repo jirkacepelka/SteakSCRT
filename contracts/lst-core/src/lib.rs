@@ -8,6 +8,7 @@
 //!   seven concurrent unbonding entries per validator is never reached,
 //! * compound staking rewards and take the protocol's performance fee.
 
+pub mod contract;
 pub mod error;
 pub mod math;
 pub mod state;

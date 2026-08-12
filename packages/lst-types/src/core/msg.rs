@@ -83,11 +83,21 @@ pub enum ExecuteMsg {
     SetPaused {
         paused: bool,
     },
-    /// Bind the derivative token contract. One-shot: callable by the admin exactly once,
-    /// and only before any tokens exist.
-    RegisterToken {
-        address: String,
-        code_hash: String,
+    /// Bind the derivative token and seed the pool, in one atomic admin call.
+    ///
+    /// One-shot, and required before any deposit is accepted. The attached SCRT is
+    /// delegated and its shares are minted to this contract's own address, where no code
+    /// path can ever redeem them. Those permanently locked shares are what makes the
+    /// classic first-depositor inflation attack uneconomic: an attacker would have to
+    /// donate more than the seed to move the exchange rate enough for rounding to swallow
+    /// a real deposit.
+    ///
+    /// Registration and seeding are deliberately not separate messages. Splitting them
+    /// would leave a window in which the token exists, deposits are legal, and the pool is
+    /// still empty — which is precisely the state the seed exists to prevent.
+    Bootstrap {
+        token_address: String,
+        token_code_hash: String,
     },
 }
 
@@ -234,6 +244,10 @@ pub enum ExecuteAnswer {
     },
     CreateViewingKey {
         key: String,
+    },
+    Bootstrap {
+        scrt_seeded: Uint128,
+        locked_shares: Uint128,
     },
     Ok {},
 }

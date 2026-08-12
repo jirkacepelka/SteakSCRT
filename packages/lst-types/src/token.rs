@@ -7,7 +7,15 @@
 
 use cosmwasm_std::Uint128;
 use schemars::JsonSchema;
+use secret_toolkit::utils::{HandleCallback, Query};
 use serde::{Deserialize, Serialize};
+
+/// Cross-contract payloads are padded to a multiple of this before encryption.
+///
+/// Secret hides message *contents*, not message *lengths*. Without padding, an observer
+/// could tell a mint from a burn, and read the rough magnitude of an amount off the
+/// ciphertext size alone.
+pub const CALL_BLOCK_SIZE: usize = 256;
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
 #[serde(rename_all = "snake_case")]
@@ -32,10 +40,18 @@ pub enum TokenExecuteMsg {
     },
 }
 
+impl HandleCallback for TokenExecuteMsg {
+    const BLOCK_SIZE: usize = CALL_BLOCK_SIZE;
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum TokenQueryMsg {
     TokenInfo {},
+}
+
+impl Query for TokenQueryMsg {
+    const BLOCK_SIZE: usize = CALL_BLOCK_SIZE;
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
