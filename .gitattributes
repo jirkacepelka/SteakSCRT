@@ -1,0 +1,14 @@
+# Normalise line endings so a Windows checkout does not produce files that break
+# inside Linux containers.
+* text=auto eol=lf
+
+# Shell scripts run inside the devnet container. A CRLF checkout makes bash fail on the
+# trailing \r with errors that point nowhere near the real cause.
+*.sh text eol=lf
+
+# Binary artifacts must never be line-ending converted.
+*.wasm binary
+*.wasm.gz binary
+*.png binary
+*.jpg binary
+*.ico binary
