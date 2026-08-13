@@ -53,11 +53,11 @@ pub enum ContractError {
     #[error("unknown validator {address}")]
     UnknownValidator { address: String },
 
-    /// The manager tried to use a validator the owner has not approved.
+    /// The manager tried to use a validator the network has not approved.
     ///
     /// Without this the manager could introduce a validator they operate and take the
     /// protocol's whole yield as validator commission, having never moved a user token.
-    #[error("validator {address} is not on the owner's allowlist")]
+    #[error("validator {address} is not on the allowlist")]
     ValidatorNotAllowed { address: String },
 
     #[error("weight of {got} bps for {address} exceeds the {max} bps per-validator ceiling")]

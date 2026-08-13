@@ -21,17 +21,17 @@ pub const RATE_SCALE: u128 = 1_000_000_000_000_000_000;
 
 /// Hard ceiling on the performance fee, independent of governance.
 ///
-/// Governance can tune the fee but cannot raise it past this without shipping new code
-/// through the timelock, which gives holders a visible 48-hour warning instead of a
-/// silent parameter flip.
+/// The manager tunes the fee within a lower ceiling the network sets; raising this one
+/// takes a new code version, which takes a governance vote. Holders therefore see the
+/// change coming instead of finding it already applied.
 pub const MAX_PERFORMANCE_FEE_BPS: u16 = 2_000; // 20%
 
 /// Hardest ceiling on any single validator's share of the stake.
 ///
 /// Concentration is the failure this protocol is meant to avoid, and the incumbent routes
 /// 64% of its stake to one operator. Capping it in code rather than in configuration means
-/// raising it is a code change an auditor can see, not a parameter the manager or even the
-/// owner can quietly flip.
+/// raising it is a code change an auditor can see and the network votes on, not a
+/// parameter anyone can quietly flip.
 pub const MAX_VALIDATOR_WEIGHT_BPS: u16 = 2_500; // 25%
 
 /// The chain's `max_entries` staking parameter: concurrent unbonding entries permitted

@@ -133,7 +133,10 @@ pub struct UserClaim {
     pub claimed: bool,
 }
 
-/// Tunable protocol parameters. Every field is governable through the timelock.
+/// Protocol parameters.
+///
+/// Only `performance_fee_bps` is reachable by the manager. Every other field changes by
+/// replacing the code, which the network gates behind a governance vote.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
 pub struct ProtocolParams {
     /// Length of an unbonding window.

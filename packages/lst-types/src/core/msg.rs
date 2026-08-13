@@ -119,10 +119,10 @@ pub enum ExecuteMsg {
 pub enum ManagerMsg {
     /// Set the target distribution across validators.
     ///
-    /// Every address must be on the owner's allowlist, no single weight may exceed the
-    /// owner's ceiling, and the weights must sum to 10_000.
+    /// Every address must be on the network's allowlist, no single weight may exceed the
+    /// ceiling, and the weights must sum to 10_000.
     SetWeights { weights: Vec<ValidatorInit> },
-    /// Set the performance fee, up to the owner's ceiling.
+    /// Set the performance fee, up to the ceiling the network set.
     SetPerformanceFee { bps: u16 },
     /// Move stake between validators to approach the target weights.
     Rebalance { plan: Vec<RedelegateStep> },

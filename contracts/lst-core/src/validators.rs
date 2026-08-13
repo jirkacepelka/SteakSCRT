@@ -42,7 +42,7 @@ pub fn validate_set(validators: &[ValidatorInit]) -> Result<(), ContractError> {
 ///
 /// This is the boundary that makes the manager role safe to hand out. Without the
 /// allowlist check a manager could introduce a validator they operate; without the per-
-/// validator ceiling they could route the whole stake to one of the owner's validators
+/// validator ceiling they could route the whole stake to one of the approved validators
 /// that happens to be theirs. Either way they would take the entire yield as validator
 /// commission without ever touching a user's token, and no amount of care elsewhere in
 /// the contract would notice.

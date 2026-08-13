@@ -863,7 +863,7 @@ fn execute_manager(
 
             for step in &plan {
                 // Redelegating *to* somewhere off the allowlist would route stake to a
-                // validator the owner never approved — the same escape the weight check
+                // validator the network never approved — the same escape the weight check
                 // closes, reached by a different door.
                 if !allowlist.iter().any(|a| a == &step.dst_validator) {
                     return Err(ContractError::ValidatorNotAllowed {
