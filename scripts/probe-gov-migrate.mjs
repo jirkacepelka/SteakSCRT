@@ -168,7 +168,6 @@ async function main() {
       code_hash: codeHash,
       label: `lst-core-govmigrate-${Date.now()}`,
       init_msg: {
-        owner: wallet.address,
         manager: wallet.address,
         limits: { max_performance_fee_bps: 1000, max_validator_weight_bps: 2500 },
         validator_allowlist: validators.slice(0, 4),
@@ -226,15 +225,55 @@ async function main() {
   ]);
   console.log(`  -> ${result.outcome}${result.detail ? `: ${result.detail}` : ""}`);
 
-  // Ground truth rather than proposal status.
+  // The proposal only *authorises* the upgrade. Someone still has to submit the migrate
+  // transaction — which is the whole reason the next two checks matter.
+  const migrate = (toCodeId) =>
+    JSON.parse(
+      secretd([
+        "tx", "compute", "migrate", contract, String(toCodeId), "{}",
+        "--from", "validator", "--chain-id", CHAIN_ID,
+        "--keyring-backend", "test", "--gas", "900000",
+        "--gas-prices", "0.25uscrt", "--output", "json", "-y",
+      ]),
+    ).txhash;
+
+  const txResult = (hash) =>
+    JSON.parse(secretd(["query", "tx", hash, "--output", "json"]));
+
+  console.log("\nSubmitting the approved migration ...");
+  const approvedTx = migrate(targetCodeId);
+  await sleep(8_000);
+  const approved = txResult(approvedTx);
+  console.log(`  code ${approved.code}${approved.code ? `: ${approved.raw_log}` : " (accepted)"}`);
+
+  // The negative control, and the more important of the two. If an admin could migrate
+  // without a matching proposal, the governance gate would be decoration.
+  console.log("\nControl: migrating back with no proposal behind it ...");
+  const refusedTx = migrate(codeId);
+  await sleep(8_000);
+  const refused = txResult(refusedTx);
+  console.log(`  code ${refused.code}: ${refused.raw_log}`);
+
   const after = contractInfo(contract);
   console.log("\n---- ground truth ----");
-  console.log(`code id: ${after.code_id} (was ${codeId}, target ${targetCodeId})`);
-  console.log(
-    Number(after.code_id) === targetCodeId
-      ? "\nRESULT: chain governance CAN upgrade this contract."
-      : "\nRESULT: the contract was not migrated.",
-  );
+  console.log(`code id: ${after.code_id} (was ${codeId}, approved target ${targetCodeId})`);
+
+  const upgraded = Number(after.code_id) === targetCodeId;
+  const gateHeld = refused.code !== 0;
+
+  if (upgraded && gateHeld) {
+    console.log(
+      "\nRESULT: the network gates upgrades. The approved migration went through, the\n" +
+        "unapproved one was refused. The admin key is a relay, not an authority.",
+    );
+  } else if (upgraded) {
+    console.log(
+      "\nRESULT: the migration worked, but an unapproved one ALSO worked — the gate is\n" +
+        "not holding. Do not rely on it.",
+    );
+  } else {
+    console.log("\nRESULT: the approved migration did not take effect.");
+  }
 }
 
 main().catch((e) => {

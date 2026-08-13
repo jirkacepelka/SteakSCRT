@@ -6,8 +6,8 @@ use cosmwasm_std::{
 };
 
 use lst_types::core::msg::{
-    ExecuteAnswer, ExecuteMsg, InstantiateMsg, ManagerMsg, MigrateMsg, OwnerMsg, QueryAnswer,
-    QueryMsg, ReceiveHookMsg,
+    ExecuteAnswer, ExecuteMsg, InstantiateMsg, ManagerMsg, MigrateMsg, QueryAnswer, QueryMsg,
+    ReceiveHookMsg,
 };
 use lst_types::core::types::{
     ContractInfo, ManagerLimits, ProtocolParams, StateResponse, UnbondWindow, ValidatorEntry,
@@ -68,13 +68,12 @@ pub fn instantiate(
         });
     }
 
-    let owner = optional_addr(deps.as_ref(), msg.owner, &info.sender)?;
     let manager = optional_addr(deps.as_ref(), msg.manager, &info.sender)?;
     let treasury = deps.api.addr_validate(&msg.treasury)?;
 
     let config = Config {
-        owner,
         manager,
+        deployer: Some(info.sender.clone()),
         limits: msg.limits,
         treasury,
         // Bound by `Bootstrap`, which also seeds the pool.
@@ -110,7 +109,6 @@ pub fn instantiate(
 
     Ok(Response::new()
         .add_attribute("action", "instantiate")
-        .add_attribute("owner", config.owner)
         .add_attribute("manager", config.manager))
 }
 
@@ -138,7 +136,6 @@ pub fn execute(
         ExecuteMsg::Compound { limit } => execute_compound(deps, env, limit),
         ExecuteMsg::Sync { limit } => execute_sync(deps, env, limit),
         ExecuteMsg::SetPaused { paused } => execute_set_paused(deps, info, paused),
-        ExecuteMsg::Owner(m) => execute_owner(deps, env, info, m),
         ExecuteMsg::Manager(m) => execute_manager(deps, env, info, m),
         _ => Err(ContractError::Std(StdError::generic_err(
             "not implemented yet",
@@ -475,12 +472,17 @@ fn execute_bootstrap(
     token_code_hash: String,
 ) -> Result<Response, ContractError> {
     let mut config = CONFIG.load(deps.storage)?;
-    if info.sender != config.owner {
-        return Err(ContractError::Unauthorized);
+    match &config.deployer {
+        Some(deployer) if deployer == &info.sender => {}
+        // Either someone else is calling, or the right has already been spent.
+        Some(_) => return Err(ContractError::Unauthorized),
+        None => return Err(ContractError::TokenAlreadyRegistered),
     }
     if config.token.is_some() {
         return Err(ContractError::TokenAlreadyRegistered);
     }
+    // Spend the right. From here the token address is fixed for the life of the contract.
+    config.deployer = None;
 
     let seed = exact_funds(&info, &config.bonded_denom)?;
     let minimum = Uint128::new(MIN_BOOTSTRAP_SEED);
@@ -813,75 +815,10 @@ fn execute_compound(
         })?))
 }
 
-/// Owner tier: everything the manager is not trusted with.
-fn execute_owner(
-    deps: DepsMut,
-    _env: Env,
-    info: MessageInfo,
-    msg: OwnerMsg,
-) -> Result<Response, ContractError> {
-    let mut config = CONFIG.load(deps.storage)?;
-    if info.sender != config.owner {
-        return Err(ContractError::Unauthorized);
-    }
-
-    match msg {
-        OwnerMsg::UpdateParams { params } => {
-            validate_params(&params)?;
-            // The fee lives in params but is bounded by the manager's ceiling, so the
-            // owner cannot accidentally leave a fee in place that the manager could not
-            // have set themselves.
-            if params.performance_fee_bps > config.limits.max_performance_fee_bps {
-                return Err(ContractError::FeeTooHigh {
-                    got: params.performance_fee_bps,
-                    max: config.limits.max_performance_fee_bps,
-                });
-            }
-            config.params = params;
-        }
-
-        OwnerMsg::SetValidatorAllowlist { validators } => {
-            ALLOWLIST.save(deps.storage, &validators)?;
-
-            // Anything no longer allowed stops receiving stake immediately and is drained
-            // first. It cannot simply be dropped: its stake is still delegated and takes
-            // an unbonding period to recover.
-            let mut set = VALIDATORS.load(deps.storage)?;
-            for entry in set.iter_mut() {
-                if !validators.iter().any(|a| a == &entry.address) {
-                    entry.weight_bps = 0;
-                    entry.status = if entry.bonded.is_zero() {
-                        ValidatorStatus::Removed
-                    } else {
-                        ValidatorStatus::Draining
-                    };
-                }
-            }
-            VALIDATORS.save(deps.storage, &set)?;
-        }
-
-        OwnerMsg::SetManagerLimits { limits } => {
-            validate_limits(&limits)?;
-            config.limits = limits;
-        }
-        OwnerMsg::SetManager { address } => {
-            config.manager = deps.api.addr_validate(&address)?;
-        }
-        OwnerMsg::SetTreasury { address } => {
-            config.treasury = deps.api.addr_validate(&address)?;
-        }
-        OwnerMsg::SetOwner { address } => {
-            config.owner = deps.api.addr_validate(&address)?;
-        }
-    }
-
-    CONFIG.save(deps.storage, &config)?;
-    Ok(Response::new()
-        .add_attribute("action", "owner")
-        .set_data(to_binary(&ExecuteAnswer::Ok {})?))
-}
-
-/// Manager tier: fees and validator distribution, nothing else.
+/// The manager: fees and validator distribution, nothing else.
+///
+/// This is the whole of the contract's mutable authority. Everything outside it moves only
+/// when the network votes in a new code version.
 fn execute_manager(
     deps: DepsMut,
     _env: Env,
@@ -999,10 +936,10 @@ fn execute_set_paused(
     paused: bool,
 ) -> Result<Response, ContractError> {
     let mut config = CONFIG.load(deps.storage)?;
-    // Both tiers may pause. Pausing blocks deposits only, so a rogue manager can turn
-    // away new money but cannot trap anyone's funds — and the owner answers that by
-    // replacing them.
-    if info.sender != config.owner && info.sender != config.manager {
+    // Pausing blocks deposits only. A rogue manager can turn away new money but cannot
+    // trap anyone's funds, and the network answers that by voting in a version naming a
+    // different manager.
+    if info.sender != config.manager {
         return Err(ContractError::Unauthorized);
     }
     config.paused = paused;
@@ -1242,8 +1179,6 @@ pub const EXCHANGE_RATE_SCALE: u128 = RATE_SCALE;
 /// entirely. That is deliberate: it is the one power that can rewrite every other rule,
 /// and it should not sit behind a flag the contract itself can flip.
 #[entry_point]
-pub fn migrate(_deps: DepsMut, _env: Env, msg: MigrateMsg) -> Result<Response, ContractError> {
-    match msg {
-        MigrateMsg::Noop {} => Ok(Response::new().add_attribute("action", "migrate")),
-    }
+pub fn migrate(_deps: DepsMut, _env: Env, _msg: MigrateMsg) -> Result<Response, ContractError> {
+    Ok(Response::new().add_attribute("action", "migrate"))
 }

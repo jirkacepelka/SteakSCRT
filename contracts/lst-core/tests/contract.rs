@@ -16,16 +16,13 @@ use cosmwasm_std::{
 use lst_core::contract::{execute, instantiate, query};
 use lst_core::error::ContractError;
 use lst_types::core::msg::{
-    ExecuteAnswer, ExecuteMsg, InstantiateMsg, ManagerMsg, OwnerMsg, QueryAnswer, QueryMsg,
-    ReceiveHookMsg,
+    ExecuteAnswer, ExecuteMsg, InstantiateMsg, ManagerMsg, QueryAnswer, QueryMsg, ReceiveHookMsg,
 };
-use lst_types::core::types::{
-    ManagerLimits, ProtocolParams, RedelegateStep, ValidatorInit, ValidatorStatus,
-};
+use lst_types::core::types::{ManagerLimits, ProtocolParams, RedelegateStep, ValidatorInit};
 
 const DENOM: &str = "uscrt";
 const DAY: u64 = 86_400;
-const OWNER: &str = "owner";
+const DEPLOYER: &str = "deployer";
 const MANAGER: &str = "manager";
 const USER: &str = "user";
 const TOKEN: &str = "token_contract";
@@ -82,7 +79,6 @@ fn validator_set() -> Vec<ValidatorInit> {
 
 fn init_msg(params: ProtocolParams, validators: Vec<ValidatorInit>) -> InstantiateMsg {
     InstantiateMsg {
-        owner: Some(OWNER.to_string()),
         manager: Some(MANAGER.to_string()),
         limits: limits(),
         validator_allowlist: vec![
@@ -151,7 +147,7 @@ fn bootstrapped() -> (Deps, Env) {
     instantiate(
         deps.as_mut(),
         env.clone(),
-        mock_info(OWNER, &[]),
+        mock_info(DEPLOYER, &[]),
         init_msg(params(), validator_set()),
     )
     .unwrap();
@@ -162,7 +158,7 @@ fn bootstrapped() -> (Deps, Env) {
     execute(
         deps.as_mut(),
         env.clone(),
-        mock_info(OWNER, &[Coin::new(SEED, DENOM)]),
+        mock_info(DEPLOYER, &[Coin::new(SEED, DENOM)]),
         ExecuteMsg::Bootstrap {
             token_address: TOKEN.to_string(),
             token_code_hash: TOKEN_HASH.to_string(),
@@ -189,7 +185,7 @@ fn a_three_day_window_is_rejected_because_it_needs_more_entries_than_the_chain_a
     let err = instantiate(
         deps.as_mut(),
         mock_env(),
-        mock_info(OWNER, &[]),
+        mock_info(DEPLOYER, &[]),
         init_msg(p, validator_set()),
     )
     .unwrap_err();
@@ -209,7 +205,7 @@ fn a_four_day_window_is_rejected_for_leaving_no_headroom() {
     let err = instantiate(
         deps.as_mut(),
         mock_env(),
-        mock_info(OWNER, &[]),
+        mock_info(DEPLOYER, &[]),
         init_msg(p, validator_set()),
     )
     .unwrap_err();
@@ -229,7 +225,7 @@ fn an_entry_ceiling_at_the_chain_limit_is_rejected() {
     let err = instantiate(
         deps.as_mut(),
         mock_env(),
-        mock_info(OWNER, &[]),
+        mock_info(DEPLOYER, &[]),
         init_msg(p, validator_set()),
     )
     .unwrap_err();
@@ -249,7 +245,7 @@ fn an_excessive_performance_fee_is_rejected() {
     let err = instantiate(
         deps.as_mut(),
         mock_env(),
-        mock_info(OWNER, &[]),
+        mock_info(DEPLOYER, &[]),
         init_msg(p, validator_set()),
     )
     .unwrap_err();
@@ -271,7 +267,7 @@ fn a_validator_set_whose_weights_do_not_sum_to_one_hundred_percent_is_rejected()
     let err = instantiate(
         deps.as_mut(),
         mock_env(),
-        mock_info(OWNER, &[]),
+        mock_info(DEPLOYER, &[]),
         init_msg(params(), bad),
     )
     .unwrap_err();
@@ -288,7 +284,7 @@ fn bootstrap_locks_its_shares_in_the_contract_and_delegates_the_seed() {
     instantiate(
         deps.as_mut(),
         env.clone(),
-        mock_info(OWNER, &[]),
+        mock_info(DEPLOYER, &[]),
         init_msg(params(), validator_set()),
     )
     .unwrap();
@@ -296,7 +292,7 @@ fn bootstrap_locks_its_shares_in_the_contract_and_delegates_the_seed() {
     let res = execute(
         deps.as_mut(),
         env.clone(),
-        mock_info(OWNER, &[Coin::new(SEED, DENOM)]),
+        mock_info(DEPLOYER, &[Coin::new(SEED, DENOM)]),
         ExecuteMsg::Bootstrap {
             token_address: TOKEN.to_string(),
             token_code_hash: TOKEN_HASH.to_string(),
@@ -339,7 +335,7 @@ fn only_the_admin_can_bootstrap() {
     instantiate(
         deps.as_mut(),
         env.clone(),
-        mock_info(OWNER, &[]),
+        mock_info(DEPLOYER, &[]),
         init_msg(params(), validator_set()),
     )
     .unwrap();
@@ -365,7 +361,7 @@ fn a_seed_below_the_minimum_is_rejected() {
     instantiate(
         deps.as_mut(),
         env.clone(),
-        mock_info(OWNER, &[]),
+        mock_info(DEPLOYER, &[]),
         init_msg(params(), validator_set()),
     )
     .unwrap();
@@ -374,7 +370,7 @@ fn a_seed_below_the_minimum_is_rejected() {
     let err = execute(
         deps.as_mut(),
         env,
-        mock_info(OWNER, &[Coin::new(SEED - 1, DENOM)]),
+        mock_info(DEPLOYER, &[Coin::new(SEED - 1, DENOM)]),
         ExecuteMsg::Bootstrap {
             token_address: TOKEN.to_string(),
             token_code_hash: TOKEN_HASH.to_string(),
@@ -395,7 +391,7 @@ fn bootstrapping_twice_is_rejected() {
     let err = execute(
         deps.as_mut(),
         env,
-        mock_info(OWNER, &[Coin::new(SEED, DENOM)]),
+        mock_info(DEPLOYER, &[Coin::new(SEED, DENOM)]),
         ExecuteMsg::Bootstrap {
             token_address: "another_token".to_string(),
             token_code_hash: TOKEN_HASH.to_string(),
@@ -415,7 +411,7 @@ fn deposits_are_refused_before_the_pool_is_seeded() {
     instantiate(
         deps.as_mut(),
         env.clone(),
-        mock_info(OWNER, &[]),
+        mock_info(DEPLOYER, &[]),
         init_msg(params(), validator_set()),
     )
     .unwrap();
@@ -557,7 +553,7 @@ fn pausing_blocks_deposits() {
     execute(
         deps.as_mut(),
         env.clone(),
-        mock_info(OWNER, &[]),
+        mock_info(MANAGER, &[]),
         ExecuteMsg::SetPaused { paused: true },
     )
     .unwrap();
@@ -900,7 +896,7 @@ fn pausing_does_not_trap_withdrawals() {
     execute(
         deps.as_mut(),
         env.clone(),
-        mock_info(OWNER, &[]),
+        mock_info(MANAGER, &[]),
         ExecuteMsg::SetPaused { paused: true },
     )
     .unwrap();
@@ -1260,20 +1256,6 @@ fn a_withdrawal_does_not_move_the_rate_for_the_holders_who_stayed() {
 // role can do, and most of them exist to pin down what it *cannot*: the whole point of
 // handing the role out is that doing so is safe.
 
-fn owner_msg(
-    deps: &mut Deps,
-    env: &Env,
-    who: &str,
-    msg: OwnerMsg,
-) -> Result<Response, ContractError> {
-    execute(
-        deps.as_mut(),
-        env.clone(),
-        mock_info(who, &[]),
-        ExecuteMsg::Owner(msg),
-    )
-}
-
 fn manager_msg(
     deps: &mut Deps,
     env: &Env,
@@ -1417,158 +1399,64 @@ fn the_manager_can_set_the_fee_up_to_the_owners_ceiling() {
 }
 
 #[test]
-fn the_manager_cannot_redirect_the_fee_stream_to_themselves() {
-    // Setting the treasury is the shortest path from "runs the protocol" to "is paid by
-    // the protocol", so it sits with the owner.
+fn nothing_but_the_manager_holds_authority_over_this_contract() {
+    // The point of the design: there is no second key. Everything outside the manager's
+    // remit moves only when the network votes in a new code version, so there is simply no
+    // message that changes the treasury, the allowlist, the limits or the manager itself.
     let (mut deps, env) = bootstrapped();
 
-    let err = owner_msg(
-        &mut deps,
-        &env,
-        MANAGER,
-        OwnerMsg::SetTreasury {
-            address: MANAGER.to_string(),
+    // The deployer's single-use right was spent by Bootstrap and cannot be replayed.
+    let err = execute(
+        deps.as_mut(),
+        env.clone(),
+        mock_info(DEPLOYER, &[Coin::new(SEED, DENOM)]),
+        ExecuteMsg::Bootstrap {
+            token_address: "a_token_the_deployer_controls".to_string(),
+            token_code_hash: TOKEN_HASH.to_string(),
         },
     )
     .unwrap_err();
+    assert_eq!(err, ContractError::TokenAlreadyRegistered);
 
-    assert_eq!(err, ContractError::Unauthorized);
-}
-
-#[test]
-fn the_manager_cannot_widen_their_own_limits() {
-    let (mut deps, env) = bootstrapped();
-
-    let err = owner_msg(
-        &mut deps,
-        &env,
-        MANAGER,
-        OwnerMsg::SetManagerLimits {
-            limits: ManagerLimits {
-                max_performance_fee_bps: 2_000,
-                max_validator_weight_bps: 2_500,
-            },
+    // And the manager cannot pick up what the deployer put down.
+    let err = execute(
+        deps.as_mut(),
+        env,
+        mock_info(MANAGER, &[Coin::new(SEED, DENOM)]),
+        ExecuteMsg::Bootstrap {
+            token_address: "a_token_the_manager_controls".to_string(),
+            token_code_hash: TOKEN_HASH.to_string(),
         },
     )
     .unwrap_err();
-
-    assert_eq!(err, ContractError::Unauthorized);
+    assert_eq!(err, ContractError::TokenAlreadyRegistered);
 }
 
 #[test]
-fn the_manager_cannot_widen_the_allowlist_or_appoint_themselves_owner() {
+fn only_the_manager_can_pause() {
+    // Pausing blocks deposits only, so the manager holding it cannot trap anyone's funds.
     let (mut deps, env) = bootstrapped();
 
-    for msg in [
-        OwnerMsg::SetValidatorAllowlist {
-            validators: vec!["the_managers_own_validator".to_string()],
-        },
-        OwnerMsg::SetOwner {
-            address: MANAGER.to_string(),
-        },
-        OwnerMsg::SetManager {
-            address: MANAGER.to_string(),
-        },
-    ] {
-        assert_eq!(
-            owner_msg(&mut deps, &env, MANAGER, msg).unwrap_err(),
-            ContractError::Unauthorized
-        );
-    }
-}
-
-#[test]
-fn the_owner_cannot_raise_limits_past_the_ceilings_in_the_code() {
-    // Governance can tighten these but never loosen them past what is compiled in.
-    // Raising the hard limit is a code change an auditor can see.
-    let (mut deps, env) = bootstrapped();
-
-    let err = owner_msg(
-        &mut deps,
-        &env,
-        OWNER,
-        OwnerMsg::SetManagerLimits {
-            limits: ManagerLimits {
-                max_performance_fee_bps: 2_001, // above the compiled 20%
-                max_validator_weight_bps: 2_500,
-            },
-        },
-    )
-    .unwrap_err();
-    assert_eq!(err, ContractError::LimitsExceedCode);
-
-    let err = owner_msg(
-        &mut deps,
-        &env,
-        OWNER,
-        OwnerMsg::SetManagerLimits {
-            limits: ManagerLimits {
-                max_performance_fee_bps: 1_000,
-                max_validator_weight_bps: 2_501, // above the compiled 25%
-            },
-        },
-    )
-    .unwrap_err();
-    assert_eq!(err, ContractError::LimitsExceedCode);
-}
-
-#[test]
-fn dropping_a_validator_from_the_allowlist_drains_it_rather_than_stranding_its_stake() {
-    // Stake cannot be recalled synchronously, so a removed validator has to keep its
-    // balance and stop receiving new delegations until the queue empties it.
-    let (mut deps, env) = bootstrapped();
-
-    owner_msg(
-        &mut deps,
-        &env,
-        OWNER,
-        OwnerMsg::SetValidatorAllowlist {
-            validators: vec![V2.to_string(), V3.to_string(), V4.to_string()],
-        },
+    execute(
+        deps.as_mut(),
+        env.clone(),
+        mock_info(MANAGER, &[]),
+        ExecuteMsg::SetPaused { paused: true },
     )
     .unwrap();
 
-    let answer: QueryAnswer =
-        from_binary(&query(deps.as_ref(), env, QueryMsg::Validators {}).unwrap()).unwrap();
-    match answer {
-        QueryAnswer::Validators { validators } => {
-            let v1 = validators.iter().find(|v| v.address == V1).unwrap();
-            assert_eq!(v1.status, ValidatorStatus::Draining);
-            assert_eq!(v1.weight_bps, 0, "no new stake goes there");
-            assert!(
-                !v1.bonded.is_zero(),
-                "its existing stake is still delegated"
-            );
-        }
-        other => panic!("unexpected answer {other:?}"),
+    for who in [DEPLOYER, USER] {
+        assert_eq!(
+            execute(
+                deps.as_mut(),
+                env.clone(),
+                mock_info(who, &[]),
+                ExecuteMsg::SetPaused { paused: true },
+            )
+            .unwrap_err(),
+            ContractError::Unauthorized
+        );
     }
-}
-
-#[test]
-fn both_tiers_can_pause_but_neither_can_trap_a_withdrawal() {
-    let (mut deps, env) = bootstrapped();
-
-    for who in [OWNER, MANAGER] {
-        execute(
-            deps.as_mut(),
-            env.clone(),
-            mock_info(who, &[]),
-            ExecuteMsg::SetPaused { paused: true },
-        )
-        .unwrap();
-    }
-
-    // A stranger still cannot.
-    assert_eq!(
-        execute(
-            deps.as_mut(),
-            env.clone(),
-            mock_info(USER, &[]),
-            ExecuteMsg::SetPaused { paused: true },
-        )
-        .unwrap_err(),
-        ContractError::Unauthorized
-    );
 }
 
 // ---- compounding ----
@@ -1747,7 +1635,7 @@ fn a_zero_fee_leaves_the_whole_reward_with_holders() {
     instantiate(
         deps.as_mut(),
         env.clone(),
-        mock_info(OWNER, &[]),
+        mock_info(DEPLOYER, &[]),
         init_msg(p, validator_set()),
     )
     .unwrap();
@@ -1756,7 +1644,7 @@ fn a_zero_fee_leaves_the_whole_reward_with_holders() {
     execute(
         deps.as_mut(),
         env.clone(),
-        mock_info(OWNER, &[Coin::new(SEED, DENOM)]),
+        mock_info(DEPLOYER, &[Coin::new(SEED, DENOM)]),
         ExecuteMsg::Bootstrap {
             token_address: TOKEN.to_string(),
             token_code_hash: TOKEN_HASH.to_string(),

@@ -12,13 +12,10 @@ use super::types::{
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
 pub struct InstantiateMsg {
-    /// Holds everything the manager does not. Defaults to the sender so deployment can
-    /// bootstrap; leaving it on a deploy key is a rug vector and the deploy script refuses
-    /// to finish without handing it over.
-    pub owner: Option<String>,
     /// Runs the protocol day to day. Defaults to the sender.
     pub manager: Option<String>,
-    /// Bounds on what the manager may do.
+    /// Bounds on what the manager may do. Changing them requires a governance-approved
+    /// code version.
     pub limits: ManagerLimits,
     /// Validators the manager may assign weight to. Must contain every validator in
     /// `validators`.
@@ -79,21 +76,25 @@ pub enum ExecuteMsg {
         limit: Option<u32>,
     },
 
-    // ---- authority ----
-    Owner(OwnerMsg),
+    // ---- the manager, the only authority this contract recognises ----
     Manager(ManagerMsg),
 
-    /// Emergency stop, available to owner and manager alike.
+    /// Emergency stop, available to the manager.
     ///
     /// Blocks `Deposit` only. Claiming matured funds is never pausable, so the worst a
-    /// rogue manager achieves is turning away new money — an annoyance the owner fixes by
-    /// replacing them, not a way to trap anyone's funds.
+    /// rogue manager achieves is turning away new money — which the network answers by
+    /// voting in a version naming a different manager, not a way to trap anyone's funds.
     SetPaused {
         paused: bool,
     },
-    /// Bind the derivative token and seed the pool, in one atomic admin call.
+    /// Bind the derivative token and seed the pool, in one atomic call.
     ///
-    /// One-shot, and required before any deposit is accepted. The attached SCRT is
+    /// Callable exactly once, by whoever instantiated the contract, and required before
+    /// any deposit is accepted. The right is consumed by the call: the token address and
+    /// the derivative token's minter are both fixed forever afterwards, so this is a
+    /// deployment step rather than a standing power.
+    ///
+    /// The attached SCRT is
     /// delegated and its shares are minted to this contract's own address, where no code
     /// path can ever redeem them. Those permanently locked shares are what makes the
     /// classic first-depositor inflation attack uneconomic: an attacker would have to
@@ -106,39 +107,6 @@ pub enum ExecuteMsg {
     Bootstrap {
         token_address: String,
         token_code_hash: String,
-    },
-}
-
-/// Actions reserved to the owner.
-///
-/// Every one of these either rewrites the rules, redirects where value goes, or decides
-/// who else holds power. That is exactly the set which should not be exercisable at a
-/// moment's notice by whoever runs the protocol day to day.
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum OwnerMsg {
-    UpdateParams {
-        params: ProtocolParams,
-    },
-    /// Replace the set of validators the manager may assign weight to.
-    ///
-    /// Validators dropped from the allowlist move to `Draining` rather than vanishing:
-    /// stake already delegated to them cannot be recalled synchronously, so they stop
-    /// receiving new stake and are drained first on the way out.
-    SetValidatorAllowlist {
-        validators: Vec<String>,
-    },
-    SetManagerLimits {
-        limits: ManagerLimits,
-    },
-    SetManager {
-        address: String,
-    },
-    SetTreasury {
-        address: String,
-    },
-    SetOwner {
-        address: String,
     },
 }
 
@@ -277,9 +245,12 @@ pub enum ExecuteAnswer {
     Ok {},
 }
 
+/// Migration takes no parameters, deliberately.
+///
+/// A governance proposal approves *which code* runs, not what arguments it runs with:
+/// the second step of the flow is an ordinary migrate transaction submitted by the admin
+/// relay, and the relay chooses this payload. Any privileged field here would hand the
+/// relay authority the network never voted for. Whatever the network decides ships inside
+/// the code it approved.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum MigrateMsg {
-    /// No state migration required; only the code changes.
-    Noop {},
-}
+pub struct MigrateMsg {}

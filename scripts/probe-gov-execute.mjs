@@ -83,7 +83,6 @@ async function main() {
   // ---- instantiate, with governance as admin ----
   const DAY = 86_400;
   const initMsg = {
-    owner: govAddress,
     manager: wallet.address,
     limits: { max_performance_fee_bps: 1000, max_validator_weight_bps: 2500 },
     validator_allowlist: validators.slice(0, 4),

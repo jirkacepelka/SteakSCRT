@@ -167,14 +167,16 @@ pub struct ProtocolParams {
     pub max_unbond_entries_per_validator: u8,
 }
 
-/// Bounds the owner places on the manager.
+/// Bounds on what the manager may do, fixed by the network.
 ///
 /// The manager runs the protocol day to day and must never be able to extract value from
 /// it. The fee ceiling is the obvious half. The weight ceiling is the half that matters
 /// more: without it a manager could route the entire stake to a validator they operate and
 /// take the whole yield as validator commission, having never touched a single user token.
 /// The allowlist closes the same hole from the other side — the manager picks *among* the
-/// owner's validators, never *which* validators exist.
+/// network's validators, never *which* validators exist.
+///
+/// Changing any of it requires a new code version, which requires a governance vote.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
 pub struct ManagerLimits {
     /// Highest performance fee the manager may set.
@@ -186,14 +188,15 @@ pub struct ManagerLimits {
 /// Public, unauthenticated view of the protocol's configuration.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
 pub struct ConfigResponse {
-    /// Holds every power the manager does not: parameters, the treasury address, the
-    /// validator allowlist, and who the manager is.
-    pub owner: Addr,
-    /// Sets the fee and the distribution across validators, within the owner's limits.
+    /// Sets the fee and the distribution across validators, within `limits`. The only
+    /// address with any authority over this contract.
     pub manager: Addr,
     pub limits: ManagerLimits,
-    /// Validators the manager may assign weight to.
+    /// Validators the manager may assign weight to. Fixed by the network.
     pub validator_allowlist: Vec<String>,
+    /// True once the derivative token has been bound. Until then the deployer holds a
+    /// single-use right to bind it; afterwards nobody holds any right at all.
+    pub bootstrapped: bool,
     pub treasury: Addr,
     pub token: Option<ContractInfo>,
     pub bonded_denom: String,

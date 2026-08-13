@@ -117,6 +117,40 @@ wasm proposals by default; Secret's engine rejects both, so a host-built contrac
 and then fails validation with an unhelpful `zero byte expected` error. The pinned image
 predates that change and makes builds byte-reproducible for auditors as a bonus.
 
+## Who controls this
+
+Two parties, and only two.
+
+**The manager** sets the performance fee and the distribution of stake across validators.
+That is the entire list. It is a contract message, effective immediately, and bounded by
+ceilings compiled into the binary: a fee cap, a **25% ceiling on any single validator's
+share**, and an allowlist of validators it may use at all.
+
+Those bounds are what make the role safe to hand out. Without the weight ceiling a manager
+could route the whole stake to a validator they operate and take the yield as validator
+commission, having never touched a user's token; the allowlist closes the same hole from
+the other side, and redelegation is checked against it too.
+
+**The network** decides everything else — parameters, the allowlist, the treasury address,
+and who the manager is — by voting on a code version. The contract is deployed with
+`set-contract-governance`, a one-way switch after which upgrades require a passed
+`MsgContractGovernanceProposal`.
+
+There is no third key that can change the rules. Verified on a devnet running mainnet's
+node version, positively and negatively: with the switch set and no matching proposal, the
+admin's own migration is refused with `requires governance approval for migration`. The
+admin is a relay that can execute the upgrade the network approved and nothing else. See
+[docs/governance-findings.md](docs/governance-findings.md), reproducible via
+`scripts/probe-gov-migrate.mjs`.
+
+Migration deliberately takes no parameters. The proposal approves which code runs, not what
+arguments it runs with, and the relay chooses the payload — so a `MigrateMsg` carrying
+privileged fields would hand it authority the network never voted for.
+
+The deployer holds exactly one power, once: binding the derivative token, which cannot
+happen at instantiation because the contract and its token each need the other's address.
+The call consumes the right.
+
 ## Security posture
 
 - `overflow-checks` stays on in release builds. Every arithmetic path touches user funds.
@@ -125,7 +159,7 @@ predates that change and makes builds byte-reproducible for auditors as a bonus.
   slashing event cannot be arbitraged.
 - Claiming matured funds is never pausable — a compromised or absent admin cannot trap
   withdrawals.
-- Contract migration is gated behind the timelock, not an admin key.
+- Contract migration is gated behind a governance vote, not an admin key.
 
 ## License
 

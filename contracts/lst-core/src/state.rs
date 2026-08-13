@@ -61,10 +61,20 @@ pub static CLAIM_INDEX: AppendStore<u64> = AppendStore::new(KEY_CLAIM_INDEX);
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
 pub struct Config {
-    /// Holds every power the manager does not.
-    pub owner: Addr,
-    /// Runs the protocol day to day, within `limits`.
+    /// Runs the protocol day to day, within `limits`. The only address this contract
+    /// grants any authority to.
+    ///
+    /// Everything else — the parameters, the allowlist, the treasury, and who the manager
+    /// is — changes only by replacing the code, which the network gates behind a
+    /// governance vote. There is deliberately no second key that can change the rules.
     pub manager: Addr,
+    /// Whoever instantiated the contract, retained solely so they can bind the derivative
+    /// token once.
+    ///
+    /// The binding cannot happen at instantiation because the contract and its token each
+    /// need the other's address. Cleared by `Bootstrap`, after which no address holds this
+    /// right and the token can never be re-pointed.
+    pub deployer: Option<Addr>,
     pub limits: ManagerLimits,
     pub treasury: Addr,
     /// `None` until `RegisterToken` binds the derivative token. Deposits are refused
@@ -78,10 +88,10 @@ pub struct Config {
 impl Config {
     pub fn into_response(self, allowlist: Vec<String>) -> ConfigResponse {
         ConfigResponse {
-            owner: self.owner,
             manager: self.manager,
             limits: self.limits,
             validator_allowlist: allowlist,
+            bootstrapped: self.deployer.is_none(),
             treasury: self.treasury,
             token: self.token,
             bonded_denom: self.bonded_denom,
