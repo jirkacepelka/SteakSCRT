@@ -52,7 +52,6 @@ claiming a Secret LST makes staking "anonymous" is overselling it.
 ```
 contracts/lst-core     staking engine, unbonding queue, exchange-rate accounting
 contracts/lst-token    submodule: scrtlabs/snip20-reference-impl @ v1.5.0, unmodified
-contracts/timelock     delayed execution over governance and migrations
 packages/lst-types     shared wire types; source of truth for TypeScript codegen
 keeper/                upkeep bot: compound, advance windows, collect, rebalance
 app/                   frontend
@@ -72,16 +71,22 @@ Forking would have meant owning ~5,000 lines of privacy-critical code — delaye
 buffers, bucketed entry tries, permit handling — for no behavioural gain, and every future
 upstream fix would have become a manual merge.
 
-Two consequences worth knowing:
+The token carries its own internal admin, separate from the chain-level contract admin,
+and it is a real authority: it can change the minter set and halt all transfers. Deployment
+disposes of it rather than holding it.
 
-- The token's admin must be the timelock. A token admin can change minters and halt
-  transfers, so leaving it on a deploy key would be a mint-anything backdoor.
-- After granting `lst-core` minting rights, deployment **removes the deploy key from the
-  minter set**. `SetMinters` replaces the list wholesale, which does both in one call.
+- `SetMinters` is called once to make `lst-core` the sole minter. It replaces the list
+  wholesale, so the same call removes the deploy key — leaving it in would be a
+  mint-anything backdoor.
+- The token's admin is then set to **`lst-core`'s own address**. `lst-core` has no code
+  path that sends token admin messages, so the powers become permanently inert: the minter
+  set can never change, the token can never be halted, and the admin can never be handed
+  on. Upgrades to the token itself go through `set-contract-governance` like `lst-core`'s.
 
-A halted token would block new withdrawal *requests*, because those burn dSCRT. It cannot
-block claims on already-matured windows: those pay out native SCRT straight from
-`lst-core` and never touch the token.
+That last point matters for withdrawals. A halted token would block new withdrawal
+*requests*, because those burn dSCRT. Making the halt unreachable removes the concern
+entirely — and even if it were reachable, claims on already-matured windows pay out native
+SCRT straight from `lst-core` and never touch the token.
 
 ## Development
 
