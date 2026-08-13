@@ -83,14 +83,15 @@ async function main() {
   // ---- instantiate, with governance as admin ----
   const DAY = 86_400;
   const initMsg = {
-    admin: govAddress,
-    gov: govAddress,
+    owner: govAddress,
+    manager: wallet.address,
+    limits: { max_performance_fee_bps: 1000, max_validator_weight_bps: 2500 },
+    validator_allowlist: validators.slice(0, 4),
     treasury: wallet.address,
     bonded_denom: "uscrt",
-    validators: [
-      { address: validators[0], weight_bps: 6000 },
-      { address: validators[1], weight_bps: 4000 },
-    ],
+    validators: validators
+      .slice(0, 4)
+      .map((address) => ({ address, weight_bps: 2500 })),
     params: {
       unbond_window_secs: 5 * DAY,
       unbonding_period_secs: 90, // the devnet's actual unbonding time
@@ -126,6 +127,7 @@ async function main() {
   // Encrypt the execute payload exactly as a normal transaction would, then hand the
   // ciphertext to governance and see whether the enclave still accepts it when the gov
   // module dispatches it.
+  // SetPaused is callable by the owner, and the owner is governance here.
   const encrypted = await client.encryptionUtils.encrypt(codeHash, {
     set_paused: { paused: true },
   });

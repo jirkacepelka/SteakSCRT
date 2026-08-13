@@ -1,24 +1,26 @@
 #!/usr/bin/env node
 /**
- * Can Secret Network's governance control a contract through the *admin* role?
+ * Can Secret Network's chain governance control code upgrades of this protocol?
  *
- * A companion to `probe-gov-execute.mjs`, which established that governance cannot call
- * `MsgExecuteContract` against a secret contract: the enclave parses the signed
- * transaction carrying the encrypted input, and a message dispatched by the gov module in
- * EndBlocker has no such transaction. That failure closed the obvious route.
+ * The naive routes do not work, and an earlier version of this probe stopped there and
+ * concluded — wrongly — that the chain cannot govern a contract at all. Two things were
+ * wrong with that: it ran against LocalSecret v1.15.0, and it used the ordinary
+ * `MsgMigrateContract`.
  *
- * The admin role is a different route and worth measuring separately, because the two
- * messages behave differently:
+ * v1.21.6 added a purpose-built path. A contract admin calls `set-contract-governance`,
+ * a **one-way** switch after which upgrades require a governance vote, and the vote
+ * carries `MsgContractGovernanceProposal` rather than a normal migrate message.
  *
- *   `MsgUpdateAdmin` carries no encrypted payload at all. If governance can send it, the
- *   network can at least decide *who* may upgrade.
+ * The reason that one can work where the others cannot is visible in the proto:
  *
- *   `MsgMigrateContract` does carry an encrypted `MigrateMsg`, so it may well fail for the
- *   same reason execute did. If it succeeds, the network controls the code itself, and
- *   everything outside the manager's remit can be governed by shipping a new version.
+ *   message MigrateContractInfo { string address = 1; uint64 new_code_id = 2; }
  *
- * The answer decides how much of the protocol the chain can actually govern, so it is
- * measured rather than assumed.
+ * There is no `msg` field. Nothing is encrypted, so there is no ciphertext needing to be
+ * bound to a transaction signature — which is exactly what fails when governance
+ * dispatches an ordinary compute message from EndBlocker.
+ *
+ * This probe runs the real flow end to end and checks the chain's own record of the
+ * contract afterwards.
  *
  * Run against a running devnet:
  *   node scripts/devnet.mjs up && node scripts/probe-gov-migrate.mjs
@@ -55,18 +57,18 @@ function contractInfo(address) {
 
 /** Submit a proposal, vote it through, and report what the chain did with it. */
 async function runProposal(title, messages) {
-  const proposal = {
-    messages,
-    metadata: "probe",
-    deposit: "1000000000uscrt",
-    title,
-    summary: title,
-  };
-
   execFileSync(
     "docker",
     ["exec", "-i", CONTAINER, "sh", "-c", "cat > /tmp/proposal.json"],
-    { input: JSON.stringify(proposal) },
+    {
+      input: JSON.stringify({
+        messages,
+        metadata: "probe",
+        deposit: "1000000000uscrt",
+        title,
+        summary: title,
+      }),
+    },
   );
 
   const submit = JSON.parse(
@@ -131,11 +133,12 @@ async function main() {
   const govAddress = JSON.parse(
     secretd(["query", "auth", "module-account", "gov", "--output", "json"]),
   ).account.value.address;
-  console.log(`Gov module account: ${govAddress}`);
-
   const validators = JSON.parse(
     secretd(["query", "staking", "validators", "--output", "json"]),
   ).validators.map((v) => v.operator_address);
+
+  console.log(`Node version: ${secretd(["version"]).trim()}`);
+  console.log(`Gov module account: ${govAddress}`);
 
   const wasm = readFileSync(join(ROOT, "artifacts", "lst_core.wasm.gz"));
 
@@ -153,35 +156,27 @@ async function main() {
   const { code_hash: codeHash } = await client.query.compute.codeHashByCodeId({
     code_id: String(codeId),
   });
-  const { code_hash: targetHash } = await client.query.compute.codeHashByCodeId({
-    code_id: String(targetCodeId),
-  });
   console.log(`  code ids ${codeId} and ${targetCodeId}`);
 
   const DAY = 86_400;
-  console.log("Instantiating with governance as the contract admin ...");
+  console.log("Instantiating, admin = deployer for now ...");
   const init = await client.tx.compute.instantiateContract(
     {
       sender: wallet.address,
-      // The whole question: can this address exercise the admin role?
-      admin: govAddress,
+      admin: wallet.address,
       code_id: codeId,
       code_hash: codeHash,
-      label: `lst-core-migrate-probe-${Date.now()}`,
+      label: `lst-core-govmigrate-${Date.now()}`,
       init_msg: {
         owner: wallet.address,
         manager: wallet.address,
-        limits: {
-          max_performance_fee_bps: 1000,
-          max_validator_weight_bps: 2500,
-        },
+        limits: { max_performance_fee_bps: 1000, max_validator_weight_bps: 2500 },
         validator_allowlist: validators.slice(0, 4),
         treasury: wallet.address,
         bonded_denom: "uscrt",
-        validators: validators.slice(0, 4).map((address) => ({
-          address,
-          weight_bps: 2500,
-        })),
+        validators: validators
+          .slice(0, 4)
+          .map((address) => ({ address, weight_bps: 2500 })),
         params: {
           unbond_window_secs: 5 * DAY,
           unbonding_period_secs: 90,
@@ -197,47 +192,49 @@ async function main() {
     { gasLimit: 1_500_000 },
   );
   if (init.code !== 0) throw new Error(`instantiate failed: ${init.rawLog}`);
-
   const contract = init.arrayLog.find((l) => l.key === "contract_address").value;
   console.log(`  contract ${contract}`);
 
-  console.log(`  admin recorded on chain: ${contractInfo(contract).admin ?? "(none)"}`);
+  // ---- hand code upgrades to the network, irreversibly ----
+  console.log("\nCalling set-contract-governance (one-way) ...");
+  const handover = JSON.parse(
+    secretd([
+      "tx", "compute", "set-contract-governance", contract,
+      "--from", "validator", "--chain-id", CHAIN_ID,
+      "--keyring-backend", "test", "--gas", "300000",
+      "--gas-prices", "0.25uscrt", "--output", "json", "-y",
+    ]),
+  );
+  if (handover.code !== 0) {
+    console.error(`  failed: ${handover.raw_log}`);
+    process.exit(1);
+  }
+  await sleep(6_000);
+  console.log(`  contract info now: ${JSON.stringify(contractInfo(contract))}`);
 
-  // ---- 1. migration, which carries an encrypted MigrateMsg ----
-  console.log("\n1. MsgMigrateContract from governance");
-  const encrypted = await client.encryptionUtils.encrypt(targetHash, {
-    noop: {},
-  });
-  const migrate = await runProposal("Probe: governance migrates the contract", [
+  // ---- the actual question ----
+  console.log("\nGovernance proposal to migrate the contract");
+  const result = await runProposal("Probe: governance migrates the contract", [
     {
-      "@type": "/secret.compute.v1beta1.MsgMigrateContract",
-      sender: govAddress,
-      contract,
-      code_id: String(targetCodeId),
-      msg: Buffer.from(encrypted).toString("base64"),
+      "@type": "/secret.compute.v1beta1.MsgContractGovernanceProposal",
+      authority: govAddress,
+      title: "Migrate lst-core",
+      description: "Probe",
+      contracts: [{ address: contract, new_code_id: String(targetCodeId) }],
+      admin_updates: [],
     },
   ]);
-  console.log(`   -> ${migrate.outcome}${migrate.detail ? `: ${migrate.detail}` : ""}`);
-
-  // ---- 2. changing the admin, which carries no encrypted payload ----
-  console.log("\n2. MsgUpdateAdmin from governance");
-  const update = await runProposal("Probe: governance hands the admin role on", [
-    {
-      "@type": "/secret.compute.v1beta1.MsgUpdateAdmin",
-      sender: govAddress,
-      new_admin: wallet.address,
-      contract,
-    },
-  ]);
-  console.log(`   -> ${update.outcome}${update.detail ? `: ${update.detail}` : ""}`);
+  console.log(`  -> ${result.outcome}${result.detail ? `: ${result.detail}` : ""}`);
 
   // Ground truth rather than proposal status.
-  const after = JSON.parse(
-    secretd(["query", "compute", "contract", contract, "--output", "json"]),
-  );
+  const after = contractInfo(contract);
   console.log("\n---- ground truth ----");
-  console.log(`code id now:  ${after.code_id} (was ${codeId}, migration target ${targetCodeId})`);
-  console.log(`admin now:    ${after.admin ?? "(none)"}`);
+  console.log(`code id: ${after.code_id} (was ${codeId}, target ${targetCodeId})`);
+  console.log(
+    Number(after.code_id) === targetCodeId
+      ? "\nRESULT: chain governance CAN upgrade this contract."
+      : "\nRESULT: the contract was not migrated.",
+  );
 }
 
 main().catch((e) => {

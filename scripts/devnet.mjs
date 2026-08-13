@@ -29,7 +29,17 @@ import { fileURLToPath } from "node:url";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const CONTAINER = "secret-lst-devnet";
-const IMAGE = "ghcr.io/scrtlabs/localsecret:v1.15.0";
+/**
+ * Track mainnet, not whatever version happens to be lying around.
+ *
+ * This matters more than it looks. An earlier round of governance probes ran against
+ * v1.15.0 and concluded that chain governance cannot reach a contract at all — a
+ * conclusion that was true of that binary and wrong about the network, because v1.21.6
+ * added governance-based contract migration and a cron module that executes CosmWasm
+ * messages from a proposal. Testing an old node produced a confident, wrong answer about
+ * the protocol's entire ownership model.
+ */
+const IMAGE = "ghcr.io/scrtlabs/localsecret:v1.24.0";
 const CHAIN_ID = "secretdev-1";
 const RPC = "http://localhost:26657";
 
