@@ -35,3 +35,8 @@ Thumbs.db
 
 # Deployment records are environment-specific; devnet ones are throwaway.
 /deploy/devnet.json
+
+# Frontend build output and local pointers
+/app/.next
+/app/out
+/app/.env.local
