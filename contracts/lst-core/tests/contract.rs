@@ -18,7 +18,9 @@ use lst_core::error::ContractError;
 use lst_types::core::msg::{
     ExecuteAnswer, ExecuteMsg, InstantiateMsg, ManagerMsg, QueryAnswer, QueryMsg, ReceiveHookMsg,
 };
-use lst_types::core::types::{ManagerLimits, ProtocolParams, RedelegateStep, ValidatorInit};
+use lst_types::core::types::{
+    ManagerLimits, ProtocolParams, RedelegateStep, ValidatorInit, WindowState,
+};
 
 const DENOM: &str = "uscrt";
 const DAY: u64 = 86_400;
@@ -1456,6 +1458,183 @@ fn only_the_manager_can_pause() {
             .unwrap_err(),
             ContractError::Unauthorized
         );
+    }
+}
+
+// ---- private claims ----
+
+fn set_key(deps: &mut Deps, env: &Env, who: &str, key: &str) {
+    execute(
+        deps.as_mut(),
+        env.clone(),
+        mock_info(who, &[]),
+        ExecuteMsg::SetViewingKey {
+            key: key.to_string(),
+        },
+    )
+    .unwrap();
+}
+
+fn pending_claims(deps: &Deps, env: &Env, who: &str, key: &str) -> QueryAnswer {
+    from_binary(
+        &query(
+            deps.as_ref(),
+            env.clone(),
+            QueryMsg::PendingClaims {
+                address: who.to_string(),
+                key: key.to_string(),
+            },
+        )
+        .unwrap(),
+    )
+    .unwrap()
+}
+
+#[test]
+fn a_claim_is_visible_to_its_owner_behind_a_viewing_key() {
+    let (mut deps, env) = with_user_deposit();
+    unbond(&mut deps, &env, USER, 5_000_000).unwrap();
+    set_key(&mut deps, &env, USER, "hunter2");
+
+    match pending_claims(&deps, &env, USER, "hunter2") {
+        QueryAnswer::PendingClaims {
+            claims,
+            total_owed,
+            total_claimable_now,
+        } => {
+            assert_eq!(claims.len(), 1);
+            assert_eq!(claims[0].scrt_owed, Uint128::new(5_000_000));
+            assert!(!claims[0].claimed);
+            assert_eq!(total_owed, Uint128::new(5_000_000));
+            assert!(
+                total_claimable_now.is_zero(),
+                "nothing is claimable until the window matures"
+            );
+        }
+        other => panic!("unexpected answer {other:?}"),
+    }
+}
+
+#[test]
+fn a_wrong_key_is_indistinguishable_from_having_no_claims() {
+    // Erroring on a bad key would turn the query into an oracle for which addresses hold
+    // a position — exactly what the derivative token's privacy is meant to prevent.
+    let (mut deps, env) = with_user_deposit();
+    unbond(&mut deps, &env, USER, 5_000_000).unwrap();
+    set_key(&mut deps, &env, USER, "hunter2");
+
+    let wrong_key = pending_claims(&deps, &env, USER, "guess");
+    let no_position = pending_claims(&deps, &env, "a_stranger", "guess");
+
+    assert!(matches!(wrong_key, QueryAnswer::ViewingKeyError { .. }));
+    assert!(matches!(no_position, QueryAnswer::ViewingKeyError { .. }));
+    assert_eq!(
+        format!("{wrong_key:?}"),
+        format!("{no_position:?}"),
+        "the two cases must be byte-identical to a caller"
+    );
+}
+
+#[test]
+fn a_claim_reports_what_it_will_pay_rather_than_what_it_was_promised() {
+    // After a slashing the window pays pro-rata. A user should see the reduced figure
+    // before they come to collect, not discover it at the counter.
+    let (mut deps, mut env) = with_user_deposit();
+    unbond(&mut deps, &env, USER, 5_000_000).unwrap();
+    set_key(&mut deps, &env, USER, "hunter2");
+
+    env.block.time = env.block.time.plus_seconds(WINDOW);
+    execute(
+        deps.as_mut(),
+        env.clone(),
+        mock_info(USER, &[]),
+        ExecuteMsg::AdvanceWindow {},
+    )
+    .unwrap();
+
+    // Only 80% of the undelegated stake comes back.
+    env.block.time = env.block.time.plus_seconds(UNBONDING);
+    deps.querier.update_balance(
+        env.contract.address.clone(),
+        vec![Coin::new(4_000_000, DENOM)],
+    );
+    execute(
+        deps.as_mut(),
+        env.clone(),
+        mock_info(USER, &[]),
+        ExecuteMsg::CollectMatured { limit: None },
+    )
+    .unwrap();
+
+    match pending_claims(&deps, &env, USER, "hunter2") {
+        QueryAnswer::PendingClaims {
+            claims,
+            total_claimable_now,
+            ..
+        } => {
+            assert_eq!(claims[0].scrt_owed, Uint128::new(4_000_000));
+            assert_eq!(total_claimable_now, Uint128::new(4_000_000));
+        }
+        other => panic!("unexpected answer {other:?}"),
+    }
+}
+
+#[test]
+fn windows_are_public_and_filterable() {
+    // Deliberately unauthenticated: the undelegations a window issues are already visible
+    // on-chain, so hiding the aggregate would buy no privacy while stopping a user from
+    // seeing when the queue is being worked.
+    let (mut deps, mut env) = with_user_deposit();
+    unbond(&mut deps, &env, USER, 5_000_000).unwrap();
+
+    env.block.time = env.block.time.plus_seconds(WINDOW);
+    execute(
+        deps.as_mut(),
+        env.clone(),
+        mock_info(USER, &[]),
+        ExecuteMsg::AdvanceWindow {},
+    )
+    .unwrap();
+
+    let answer: QueryAnswer = from_binary(
+        &query(
+            deps.as_ref(),
+            env.clone(),
+            QueryMsg::Windows {
+                state: None,
+                start_after: None,
+                limit: None,
+            },
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    match answer {
+        QueryAnswer::Windows { windows } => {
+            assert_eq!(windows.len(), 2, "the closed one and the freshly opened one");
+        }
+        other => panic!("unexpected answer {other:?}"),
+    }
+
+    let answer: QueryAnswer = from_binary(
+        &query(
+            deps.as_ref(),
+            env,
+            QueryMsg::Windows {
+                state: Some(WindowState::Unbonding),
+                start_after: None,
+                limit: None,
+            },
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    match answer {
+        QueryAnswer::Windows { windows } => {
+            assert_eq!(windows.len(), 1);
+            assert_eq!(windows[0].id, 0);
+        }
+        other => panic!("unexpected answer {other:?}"),
     }
 }
 

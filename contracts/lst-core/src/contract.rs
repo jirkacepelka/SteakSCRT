@@ -6,15 +6,17 @@ use cosmwasm_std::{
 };
 
 use lst_types::core::msg::{
-    ExecuteAnswer, ExecuteMsg, InstantiateMsg, ManagerMsg, MigrateMsg, QueryAnswer, QueryMsg,
-    ReceiveHookMsg,
+    AuthQueryMsg, ExecuteAnswer, ExecuteMsg, InstantiateMsg, ManagerMsg, MigrateMsg, QueryAnswer,
+    QueryMsg, ReceiveHookMsg,
 };
 use lst_types::core::types::{
-    ContractInfo, ManagerLimits, ProtocolParams, StateResponse, UnbondWindow, ValidatorEntry,
-    ValidatorInit, ValidatorStatus, WindowState,
+    ContractInfo, ManagerLimits, ProtocolParams, StateResponse, UnbondWindow, UserClaim,
+    ValidatorEntry, ValidatorInit, ValidatorStatus, WindowState,
 };
 use lst_types::token::{TokenExecuteMsg, TokenQueryAnswer, TokenQueryMsg};
+use secret_toolkit::permit::{validate, Permit};
 use secret_toolkit::utils::{HandleCallback, Query};
+use secret_toolkit::viewing_key::{ViewingKey, ViewingKeyStore};
 
 use crate::error::ContractError;
 use crate::math::{
@@ -49,6 +51,9 @@ const MIN_BOOTSTRAP_SEED: u128 = 10_000_000; // 10 SCRT
 const DEFAULT_WINDOW_PAGE: u32 = 30;
 /// Ceiling on a single page, so one query cannot be made to walk the whole history.
 const MAX_WINDOW_PAGE: u32 = 100;
+
+/// Storage prefix for spent permits, kept separate from viewing keys.
+const PERMIT_PREFIX: &str = "permits";
 
 #[entry_point]
 pub fn instantiate(
@@ -89,6 +94,7 @@ pub fn instantiate(
     };
     CONFIG.save(deps.storage, &config)?;
 
+    ViewingKey::set_seed(deps.storage, msg.prng_seed.as_slice());
     ALLOWLIST.save(deps.storage, &msg.validator_allowlist)?;
     VALIDATORS.save(deps.storage, &initial_validator_set(msg.validators))?;
     SYNC_CURSOR.save(deps.storage, &0)?;
@@ -142,9 +148,24 @@ pub fn execute(
         ExecuteMsg::Sync { limit } => execute_sync(deps, env, limit),
         ExecuteMsg::SetPaused { paused } => execute_set_paused(deps, info, paused),
         ExecuteMsg::Manager(m) => execute_manager(deps, env, info, m),
-        _ => Err(ContractError::Std(StdError::generic_err(
-            "not implemented yet",
-        ))),
+        ExecuteMsg::SetViewingKey { key } => {
+            ViewingKey::set(deps.storage, info.sender.as_str(), &key);
+            Ok(Response::new()
+                .add_attribute("action", "set_viewing_key")
+                .set_data(to_binary(&ExecuteAnswer::Ok {})?))
+        }
+        ExecuteMsg::CreateViewingKey { entropy } => {
+            let key = ViewingKey::create(
+                deps.storage,
+                &info,
+                &env,
+                info.sender.as_str(),
+                entropy.as_bytes(),
+            );
+            Ok(Response::new()
+                .add_attribute("action", "create_viewing_key")
+                .set_data(to_binary(&ExecuteAnswer::CreateViewingKey { key })?))
+        }
     }
 }
 
@@ -981,8 +1002,88 @@ pub fn query(deps: Deps, env: Env, msg: QueryMsg) -> StdResult<Binary> {
         } => to_binary(&QueryAnswer::Windows {
             windows: query_windows(deps, state, start_after, limit)?,
         }),
-        _ => Err(StdError::generic_err("not implemented yet")),
+        QueryMsg::PendingClaims { address, key } => {
+            let account = deps.api.addr_validate(&address)?;
+            // A wrong key answers rather than errors, so a caller cannot tell "wrong key"
+            // apart from "no claims" and probe for which addresses hold a position.
+            if ViewingKey::check(deps.storage, account.as_str(), &key).is_err() {
+                return to_binary(&QueryAnswer::ViewingKeyError {
+                    msg: "wrong viewing key for this address, or no claims".to_string(),
+                });
+            }
+            to_binary(&query_pending_claims(deps, &account)?)
+        }
+        QueryMsg::WithPermit { permit, query } => {
+            let account = permit_signer(deps, &env, &permit)?;
+            match query {
+                AuthQueryMsg::PendingClaims {} => to_binary(&query_pending_claims(deps, &account)?),
+            }
+        }
     }
+}
+
+/// Resolve a SNIP-24 permit to the address that signed it.
+fn permit_signer(deps: Deps, env: &Env, permit: &Permit) -> StdResult<Addr> {
+    let signer = validate(
+        deps,
+        PERMIT_PREFIX,
+        permit,
+        env.contract.address.to_string(),
+        None,
+    )?;
+    deps.api.addr_validate(&signer)
+}
+
+/// A caller's claims, newest window first.
+///
+/// Private state: claims reveal that an address is leaving and how much it is taking, which
+/// is exactly the sort of thing the derivative token's privacy exists to hide. Served only
+/// behind a viewing key or a permit.
+fn query_pending_claims(deps: Deps, account: &Addr) -> StdResult<QueryAnswer> {
+    let claims = state::claims_for(account);
+    let index = state::claim_index_for(account);
+    let mut out = Vec::new();
+    let mut total_owed = Uint128::zero();
+    let mut claimable_now = Uint128::zero();
+
+    for id in index.iter(deps.storage)?.collect::<StdResult<Vec<u64>>>()? {
+        let Some(claim) = claims.get(deps.storage, &id) else {
+            continue;
+        };
+        let Some(window) = WINDOWS.get(deps.storage, &id) else {
+            continue;
+        };
+
+        // Report what the claim will actually pay, not what it was promised: a window that
+        // came back short after a slashing pays pro-rata, and a user should see that
+        // before they come to collect rather than after.
+        let payable =
+            windows::payout_for_claim(&window, claim.scrt_owed).map_err(StdError::from)?;
+
+        if !claim.claimed {
+            total_owed += payable;
+            if window.state == WindowState::Matured {
+                claimable_now += payable;
+            }
+        }
+
+        out.push(UserClaim {
+            window_id: id,
+            shares_burned: claim.shares_burned,
+            scrt_owed: payable,
+            matures_at: window.matures_at,
+            state: window.state,
+            claimed: claim.claimed,
+        });
+    }
+
+    out.sort_by_key(|c| std::cmp::Reverse(c.window_id));
+
+    Ok(QueryAnswer::PendingClaims {
+        claims: out,
+        total_owed,
+        total_claimable_now: claimable_now,
+    })
 }
 
 fn query_state(deps: Deps, env: &Env) -> StdResult<StateResponse> {
