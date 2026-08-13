@@ -1,0 +1,13 @@
+{
+  "name": "@secret-lst/e2e",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "End-to-end scenarios against a LocalSecret devnet",
+  "scripts": {
+    "test": "node --test --test-concurrency=1 --test-timeout=900000 src/*.test.mjs"
+  },
+  "dependencies": {
+    "secretjs": "^1.22.1"
+  }
+}

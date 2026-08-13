@@ -122,6 +122,26 @@ wasm proposals by default; Secret's engine rejects both, so a host-built contrac
 and then fails validation with an unhelpful `zero byte expected` error. The pinned image
 predates that change and makes builds byte-reproducible for auditors as a bonus.
 
+### End-to-end scenarios
+
+```bash
+node scripts/devnet.mjs up
+npm --prefix tests/e2e test
+```
+
+These run against a real chain and cover what unit tests structurally cannot: the permit
+path, because a permit is a wallet signature and the mock harness has no wallet; the
+cross-contract dance between `lst-core` and the SNIP-20; and the real staking module,
+whose unbonding behaviour the mock querier only imitates.
+
+Each scenario deploys its own instance. Sharing one would make the tests order-dependent —
+a withdrawal in one leaves a window in flight for the next — and the point of testing
+against a chain is to catch what only appears when state is real.
+
+Two assumptions the mock quietly encouraged did not survive contact with a live chain:
+rewards accrue every block, so the exchange rate is at or just above parity rather than
+exactly on it, and a window has to be waited for rather than assumed to have matured.
+
 ## Who controls this
 
 Two parties, and only two.

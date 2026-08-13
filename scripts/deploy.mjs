@@ -102,6 +102,67 @@ async function exec(client, contract, codeHash, msg, label, funds = []) {
   return tx;
 }
 
+/**
+ * Choose the validator set.
+ *
+ * On the devnet, whatever `devnet.mjs` created. Elsewhere, read the bonded set from the
+ * chain and take the ones with the lowest commission, skipping any that are jailed.
+ *
+ * `VALIDATORS` overrides all of it, because a real launch should name its validators
+ * deliberately rather than let a script pick them: this protocol decides where a
+ * meaningful share of a chain's stake goes, and that is a governance decision, not a
+ * sorting function.
+ */
+async function pickValidators(client, network) {
+  if (process.env.VALIDATORS) {
+    const named = JSON.parse(process.env.VALIDATORS);
+    if (named.length < 4) {
+      throw new Error(`VALIDATORS must name at least 4, got ${named.length}.`);
+    }
+    return named.slice(0, 4);
+  }
+
+  if (network.container) {
+    const all = JSON.parse(
+      execFileSync(
+        "docker",
+        ["exec", "-i", network.container, "secretd", "query", "staking", "validators", "--output", "json"],
+        { encoding: "utf8" },
+      ),
+    ).validators.map((v) => v.operator_address);
+    if (all.length < 4) throw new Error(`Devnet has ${all.length} validators, need 4.`);
+    return all.slice(0, 4);
+  }
+
+  const { validators } = await client.query.staking.validators({
+    status: "BOND_STATUS_BONDED",
+    pagination: { limit: "300" },
+  });
+
+  const usable = (validators ?? [])
+    .filter((v) => !v.jailed)
+    .map((v) => ({
+      address: v.operator_address,
+      commission: Number(v.commission?.commission_rates?.rate ?? "1"),
+    }))
+    .sort((a, b) => a.commission - b.commission);
+
+  if (usable.length < 4) {
+    throw new Error(
+      `Only ${usable.length} bonded validators available; set VALIDATORS explicitly.`,
+    );
+  }
+
+  console.warn(
+    [
+      "",
+      "   No VALIDATORS given — picking the four lowest-commission bonded validators.",
+      "   Fine for a testnet. For mainnet, name them deliberately.",
+    ].join("\n"),
+  );
+  return usable.slice(0, 4).map((v) => v.address);
+}
+
 async function main() {
   const { name, network, govHandover } = parseArgs();
   const wallet = new Wallet(network.mnemonic);
@@ -118,22 +179,9 @@ async function main() {
   const core = await upload(client, wallet, "lst_core.wasm.gz");
   const token = await upload(client, wallet, "snip20_reference_impl.wasm.gz");
 
-  // Validators come from the chain rather than a hard-coded list, so a devnet run picks up
-  // whatever devnet.mjs created.
-  const validators = network.container
-    ? JSON.parse(
-        execFileSync(
-          "docker",
-          ["exec", "-i", network.container, "secretd", "query", "staking", "validators", "--output", "json"],
-          { encoding: "utf8" },
-        ),
-      ).validators.map((v) => v.operator_address)
-    : JSON.parse(process.env.VALIDATORS ?? "[]");
-
-  if (validators.length < 4) {
-    throw new Error(`Need at least 4 validators, found ${validators.length}.`);
-  }
-  const chosen = validators.slice(0, 4);
+  const chosen = await pickValidators(client, network);
+  console.log(`\n   Validators: ${chosen.length} chosen`);
+  for (const v of chosen) console.log(`     ${v}`);
 
   console.log("\n2. Instantiating dSCRT ...");
   const tokenInit = await client.tx.compute.instantiateContract(
