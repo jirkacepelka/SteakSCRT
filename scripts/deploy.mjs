@@ -313,10 +313,42 @@ async function main() {
   const out = join(ROOT, "deploy", `${name}.json`);
   writeFileSync(out, `${JSON.stringify(deployment, null, 2)}\n`);
 
-  console.log(`\nWrote ${out}\n`);
-  console.log("Keeper environment:");
-  console.log(`  LST_CORE_ADDRESS=${coreAddress}`);
-  console.log(`  LST_CORE_CODE_HASH=${core.codeHash}`);
+  console.log(`\nWrote ${out}`);
+
+  console.log("\n--- app/.env.local ---");
+  console.log(
+    [
+      `NEXT_PUBLIC_CHAIN_ID=${network.chainId}`,
+      `NEXT_PUBLIC_LCD_URL=${network.url}`,
+      `NEXT_PUBLIC_CORE_ADDRESS=${coreAddress}`,
+      `NEXT_PUBLIC_CORE_CODE_HASH=${core.codeHash}`,
+      `NEXT_PUBLIC_TOKEN_ADDRESS=${tokenAddress}`,
+      `NEXT_PUBLIC_TOKEN_CODE_HASH=${token.codeHash}`,
+    ].join("\n"),
+  );
+
+  console.log("\n--- keeper environment ---");
+  console.log(
+    [
+      `CHAIN_ID=${network.chainId}`,
+      `LCD_URL=${network.url}`,
+      `LST_CORE_ADDRESS=${coreAddress}`,
+      `LST_CORE_CODE_HASH=${core.codeHash}`,
+    ].join("\n"),
+  );
+
+  if (!govHandover) {
+    // Worth saying out loud: until this runs, upgrades sit with whoever holds the deploy
+    // key, which is the one thing this protocol's design is meant to rule out.
+    console.log(
+      [
+        "",
+        "Upgrades are still controlled by the deploy key. Handing them to the network is",
+        "one-way and cannot be undone:",
+        `  secretd tx compute set-contract-governance ${coreAddress} --from <admin>`,
+      ].join("\n"),
+    );
+  }
 }
 
 main().catch((e) => {
