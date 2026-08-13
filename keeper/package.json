@@ -1,0 +1,20 @@
+{
+  "name": "@secret-lst/keeper",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Permissionless upkeep bot for the SCRT liquid staking protocol",
+  "scripts": {
+    "start": "node --experimental-strip-types src/index.ts",
+    "once": "node --experimental-strip-types src/index.ts --once",
+    "check": "node --experimental-strip-types src/index.ts --check-only",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "secretjs": "^1.22.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "typescript": "^5.7.0"
+  }
+}

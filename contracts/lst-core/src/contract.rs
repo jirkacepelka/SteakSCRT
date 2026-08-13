@@ -22,8 +22,8 @@ use crate::math::{
     RATE_SCALE,
 };
 use crate::state::{
-    self, ClaimRecord, Config, TotalsCache, ACTIVE_WINDOWS, ALLOWLIST, CONFIG, OPEN_WINDOW,
-    SYNC_CURSOR, TOTALS, VALIDATORS, WINDOWS,
+    self, ClaimRecord, Config, TotalsCache, ACTIVE_WINDOWS, ALLOWLIST, CONFIG, NEXT_WINDOW_ID,
+    OPEN_WINDOW, SYNC_CURSOR, TOTALS, VALIDATORS, WINDOWS,
 };
 use crate::{validators, windows};
 
@@ -44,6 +44,11 @@ const DEFAULT_COMPOUND_LIMIT: u32 = 3;
 /// The seed's only job is to be large enough that inflating the exchange rate past it
 /// costs more than the rounding dust an attacker could capture.
 const MIN_BOOTSTRAP_SEED: u128 = 10_000_000; // 10 SCRT
+
+/// Windows returned by a `Windows` query when the caller does not say otherwise.
+const DEFAULT_WINDOW_PAGE: u32 = 30;
+/// Ceiling on a single page, so one query cannot be made to walk the whole history.
+const MAX_WINDOW_PAGE: u32 = 100;
 
 #[entry_point]
 pub fn instantiate(
@@ -969,6 +974,13 @@ pub fn query(deps: Deps, env: Env, msg: QueryMsg) -> StdResult<Binary> {
         QueryMsg::Validators {} => to_binary(&QueryAnswer::Validators {
             validators: VALIDATORS.load(deps.storage)?,
         }),
+        QueryMsg::Windows {
+            state,
+            start_after,
+            limit,
+        } => to_binary(&QueryAnswer::Windows {
+            windows: query_windows(deps, state, start_after, limit)?,
+        }),
         _ => Err(StdError::generic_err("not implemented yet")),
     }
 }
@@ -991,6 +1003,48 @@ fn query_state(deps: Deps, env: &Env) -> StdResult<StateResponse> {
         is_stale: totals.is_stale(now, config.params.sync_stale_after_secs),
         exchange_rate: rate,
     })
+}
+
+/// Windows, oldest first, optionally filtered by state.
+///
+/// Public and unauthenticated on purpose. A window's size and timing are already visible
+/// on-chain — the undelegations it issues are public — so hiding the aggregate would buy
+/// no privacy while making it impossible for a user to see when their money is due, or for
+/// anyone to check that the queue is being worked.
+///
+/// Individual claims are a different matter and stay behind a viewing key.
+fn query_windows(
+    deps: Deps,
+    state: Option<WindowState>,
+    start_after: Option<u64>,
+    limit: Option<u32>,
+) -> StdResult<Vec<UnbondWindow>> {
+    let limit = limit.unwrap_or(DEFAULT_WINDOW_PAGE).min(MAX_WINDOW_PAGE) as usize;
+    let next_id = NEXT_WINDOW_ID.may_load(deps.storage)?.unwrap_or(0);
+    let start = start_after.map_or(0, |id| id.saturating_add(1));
+
+    let mut out = Vec::new();
+    for id in start..next_id {
+        if out.len() >= limit {
+            break;
+        }
+        // A window can be absent if it was pruned; skipping keeps the scan total rather
+        // than aborting a page because of a gap.
+        let Some(window) = WINDOWS.get(deps.storage, &id) else {
+            continue;
+        };
+        // Spelled out rather than using `is_none_or`, which is newer than this crate's
+        // declared MSRV and would not build on the optimizer image's toolchain.
+        let wanted = match state {
+            Some(filter) => filter == window.state,
+            None => true,
+        };
+        if wanted {
+            out.push(window);
+        }
+    }
+
+    Ok(out)
 }
 
 // ---- helpers ----

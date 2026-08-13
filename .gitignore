@@ -32,3 +32,6 @@ dist/
 .vscode/
 .DS_Store
 Thumbs.db
+
+# Deployment records are environment-specific; devnet ones are throwaway.
+/deploy/devnet.json
