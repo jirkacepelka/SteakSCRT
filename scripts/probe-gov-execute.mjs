@@ -100,7 +100,6 @@ async function main() {
       sync_stale_after_secs: 7200,
       max_unbond_entries_per_validator: 6,
     },
-    prng_seed: Buffer.from("probe").toString("base64"),
   };
 
   console.log("Instantiating ...");

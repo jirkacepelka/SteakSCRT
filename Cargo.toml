@@ -27,7 +27,6 @@ secret-toolkit = { version = "0.10.3", default-features = false, features = [
     "snip20",
     "utils",
     "permit",
-    "viewing-key",
 ] }
 
 schemars = "0.8.16"

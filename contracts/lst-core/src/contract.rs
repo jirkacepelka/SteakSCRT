@@ -16,7 +16,6 @@ use lst_types::core::types::{
 use lst_types::token::{TokenExecuteMsg, TokenQueryAnswer, TokenQueryMsg};
 use secret_toolkit::permit::{validate, Permit};
 use secret_toolkit::utils::{HandleCallback, Query};
-use secret_toolkit::viewing_key::{ViewingKey, ViewingKeyStore};
 
 use crate::error::ContractError;
 use crate::math::{
@@ -52,7 +51,7 @@ const DEFAULT_WINDOW_PAGE: u32 = 30;
 /// Ceiling on a single page, so one query cannot be made to walk the whole history.
 const MAX_WINDOW_PAGE: u32 = 100;
 
-/// Storage prefix for spent permits, kept separate from viewing keys.
+/// Storage prefix used by permit validation.
 const PERMIT_PREFIX: &str = "permits";
 
 #[entry_point]
@@ -94,7 +93,6 @@ pub fn instantiate(
     };
     CONFIG.save(deps.storage, &config)?;
 
-    ViewingKey::set_seed(deps.storage, msg.prng_seed.as_slice());
     ALLOWLIST.save(deps.storage, &msg.validator_allowlist)?;
     VALIDATORS.save(deps.storage, &initial_validator_set(msg.validators))?;
     SYNC_CURSOR.save(deps.storage, &0)?;
@@ -148,24 +146,6 @@ pub fn execute(
         ExecuteMsg::Sync { limit } => execute_sync(deps, env, limit),
         ExecuteMsg::SetPaused { paused } => execute_set_paused(deps, info, paused),
         ExecuteMsg::Manager(m) => execute_manager(deps, env, info, m),
-        ExecuteMsg::SetViewingKey { key } => {
-            ViewingKey::set(deps.storage, info.sender.as_str(), &key);
-            Ok(Response::new()
-                .add_attribute("action", "set_viewing_key")
-                .set_data(to_binary(&ExecuteAnswer::Ok {})?))
-        }
-        ExecuteMsg::CreateViewingKey { entropy } => {
-            let key = ViewingKey::create(
-                deps.storage,
-                &info,
-                &env,
-                info.sender.as_str(),
-                entropy.as_bytes(),
-            );
-            Ok(Response::new()
-                .add_attribute("action", "create_viewing_key")
-                .set_data(to_binary(&ExecuteAnswer::CreateViewingKey { key })?))
-        }
     }
 }
 
@@ -1002,17 +982,6 @@ pub fn query(deps: Deps, env: Env, msg: QueryMsg) -> StdResult<Binary> {
         } => to_binary(&QueryAnswer::Windows {
             windows: query_windows(deps, state, start_after, limit)?,
         }),
-        QueryMsg::PendingClaims { address, key } => {
-            let account = deps.api.addr_validate(&address)?;
-            // A wrong key answers rather than errors, so a caller cannot tell "wrong key"
-            // apart from "no claims" and probe for which addresses hold a position.
-            if ViewingKey::check(deps.storage, account.as_str(), &key).is_err() {
-                return to_binary(&QueryAnswer::ViewingKeyError {
-                    msg: "wrong viewing key for this address, or no claims".to_string(),
-                });
-            }
-            to_binary(&query_pending_claims(deps, &account)?)
-        }
         QueryMsg::WithPermit { permit, query } => {
             let account = permit_signer(deps, &env, &permit)?;
             match query {

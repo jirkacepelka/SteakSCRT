@@ -26,8 +26,6 @@ pub struct InstantiateMsg {
     pub bonded_denom: String,
     pub validators: Vec<ValidatorInit>,
     pub params: ProtocolParams,
-    /// Entropy for viewing-key generation.
-    pub prng_seed: Binary,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
@@ -48,14 +46,6 @@ pub enum ExecuteMsg {
     /// `window_ids` is omitted.
     ClaimMatured {
         window_ids: Option<Vec<u64>>,
-    },
-
-    // ---- viewing-key management (claims are private contract state) ----
-    SetViewingKey {
-        key: String,
-    },
-    CreateViewingKey {
-        entropy: String,
     },
 
     // ---- permissionless upkeep, normally driven by the keeper ----
@@ -143,13 +133,16 @@ pub enum QueryMsg {
     },
 
     // ---- authenticated ----
-    /// Viewing-key authenticated query.
-    PendingClaims {
-        address: String,
-        key: String,
-    },
-    /// SNIP-24 permit authenticated query. Preferred over viewing keys: no on-chain
-    /// setup transaction and no shared secret stored in the contract.
+    /// SNIP-24 permit authenticated query.
+    ///
+    /// The only authentication this contract accepts. A permit is a signature the user
+    /// makes in their wallet: it costs no transaction, stores no shared secret here, and
+    /// cannot be replayed against another contract. A viewing key would be a password the
+    /// contract has to keep, set by an on-chain transaction, and revocable only by
+    /// replacing it.
+    ///
+    /// One permit covers the whole app, so a user signs once per session rather than once
+    /// per screen.
     WithPermit {
         permit: Permit,
         query: AuthQueryMsg,
@@ -192,11 +185,6 @@ pub enum QueryAnswer {
         total_owed: Uint128,
         total_claimable_now: Uint128,
     },
-    /// Returned instead of failing when a viewing key does not match, so that a caller
-    /// cannot distinguish "wrong key" from "no claims".
-    ViewingKeyError {
-        msg: String,
-    },
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
@@ -234,9 +222,6 @@ pub enum ExecuteAnswer {
         total_bonded: Uint128,
         validators_processed: u32,
         done: bool,
-    },
-    CreateViewingKey {
-        key: String,
     },
     Bootstrap {
         scrt_seeded: Uint128,
