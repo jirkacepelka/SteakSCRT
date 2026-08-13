@@ -38,6 +38,77 @@ pub fn validate_set(validators: &[ValidatorInit]) -> Result<(), ContractError> {
     Ok(())
 }
 
+/// Reject a weight assignment the manager is not entitled to make.
+///
+/// This is the boundary that makes the manager role safe to hand out. Without the
+/// allowlist check a manager could introduce a validator they operate; without the per-
+/// validator ceiling they could route the whole stake to one of the owner's validators
+/// that happens to be theirs. Either way they would take the entire yield as validator
+/// commission without ever touching a user's token, and no amount of care elsewhere in
+/// the contract would notice.
+pub fn validate_managed_weights(
+    weights: &[ValidatorInit],
+    allowlist: &[String],
+    max_weight_bps: u16,
+) -> Result<(), ContractError> {
+    validate_set(weights)?;
+
+    for w in weights {
+        if !allowlist.iter().any(|a| a == &w.address) {
+            return Err(ContractError::ValidatorNotAllowed {
+                address: w.address.clone(),
+            });
+        }
+        if w.weight_bps > max_weight_bps {
+            return Err(ContractError::WeightTooHigh {
+                address: w.address.clone(),
+                got: w.weight_bps,
+                max: max_weight_bps,
+            });
+        }
+    }
+
+    Ok(())
+}
+
+/// Apply a new weight assignment to the working set.
+///
+/// Validators that keep a weight stay `Active`. Validators that lose their place move to
+/// `Draining` rather than disappearing: their stake cannot be recalled synchronously, so
+/// they stop receiving new delegations and are emptied first on the way out. Only once
+/// drained do they become `Removed`. Newly weighted validators are appended.
+pub fn apply_weights(set: &mut Vec<ValidatorEntry>, weights: &[ValidatorInit]) {
+    for entry in set.iter_mut() {
+        match weights.iter().find(|w| w.address == entry.address) {
+            Some(w) => {
+                entry.weight_bps = w.weight_bps;
+                entry.status = ValidatorStatus::Active;
+            }
+            None => {
+                entry.weight_bps = 0;
+                entry.status = if entry.bonded.is_zero() {
+                    ValidatorStatus::Removed
+                } else {
+                    ValidatorStatus::Draining
+                };
+            }
+        }
+    }
+
+    for w in weights {
+        if !set.iter().any(|e| e.address == w.address) {
+            set.push(ValidatorEntry {
+                address: w.address.clone(),
+                weight_bps: w.weight_bps,
+                status: ValidatorStatus::Active,
+                bonded: Uint128::zero(),
+                pending_rewards: Uint128::zero(),
+                active_unbond_entries: 0,
+            });
+        }
+    }
+}
+
 /// Total stake currently bonded across the whole set, draining validators included.
 pub fn total_bonded(validators: &[ValidatorEntry]) -> Uint128 {
     validators

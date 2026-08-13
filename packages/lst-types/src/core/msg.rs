@@ -6,18 +6,23 @@ use secret_toolkit::permit::Permit;
 use serde::{Deserialize, Serialize};
 
 use super::types::{
-    ConfigResponse, ProtocolParams, RedelegateStep, StateResponse, UnbondWindow, UserClaim,
-    ValidatorEntry, ValidatorInit, WindowState,
+    ConfigResponse, ManagerLimits, ProtocolParams, RedelegateStep, StateResponse, UnbondWindow,
+    UserClaim, ValidatorEntry, ValidatorInit, WindowState,
 };
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
 pub struct InstantiateMsg {
-    /// Emergency multisig. May pause deposits and nothing else. Defaults to the sender.
-    pub admin: Option<String>,
-    /// Governance address — in production this must be the timelock contract. Defaults to
-    /// the sender so that deployment can bootstrap, but leaving it there is a rug vector
-    /// and the deploy script refuses to finish without handing it over.
-    pub gov: Option<String>,
+    /// Holds everything the manager does not. Defaults to the sender so deployment can
+    /// bootstrap; leaving it on a deploy key is a rug vector and the deploy script refuses
+    /// to finish without handing it over.
+    pub owner: Option<String>,
+    /// Runs the protocol day to day. Defaults to the sender.
+    pub manager: Option<String>,
+    /// Bounds on what the manager may do.
+    pub limits: ManagerLimits,
+    /// Validators the manager may assign weight to. Must contain every validator in
+    /// `validators`.
+    pub validator_allowlist: Vec<String>,
     /// Recipient of the performance fee.
     pub treasury: String,
     /// Staking denom, `uscrt` on mainnet. Parameterised only so tests can use a devnet denom.
@@ -74,12 +79,15 @@ pub enum ExecuteMsg {
         limit: Option<u32>,
     },
 
-    // ---- governance (timelock only) ----
-    Gov(GovMsg),
+    // ---- authority ----
+    Owner(OwnerMsg),
+    Manager(ManagerMsg),
 
-    // ---- admin ----
-    /// Emergency stop. Blocks `Deposit` only — claiming matured funds is never pausable,
-    /// so a compromised or absent admin can never trap user withdrawals.
+    /// Emergency stop, available to owner and manager alike.
+    ///
+    /// Blocks `Deposit` only. Claiming matured funds is never pausable, so the worst a
+    /// rogue manager achieves is turning away new money — an annoyance the owner fixes by
+    /// replacing them, not a way to trap anyone's funds.
     SetPaused {
         paused: bool,
     },
@@ -101,38 +109,55 @@ pub enum ExecuteMsg {
     },
 }
 
+/// Actions reserved to the owner.
+///
+/// Every one of these either rewrites the rules, redirects where value goes, or decides
+/// who else holds power. That is exactly the set which should not be exercisable at a
+/// moment's notice by whoever runs the protocol day to day.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
 #[serde(rename_all = "snake_case")]
-pub enum GovMsg {
+pub enum OwnerMsg {
     UpdateParams {
         params: ProtocolParams,
     },
-    /// Replace the validator set wholesale. Weights of active validators must sum to
-    /// 10_000. Validators dropped from the set move to `Draining`, not `Removed`.
-    SetValidators {
-        validators: Vec<ValidatorInit>,
+    /// Replace the set of validators the manager may assign weight to.
+    ///
+    /// Validators dropped from the allowlist move to `Draining` rather than vanishing:
+    /// stake already delegated to them cannot be recalled synchronously, so they stop
+    /// receiving new stake and are drained first on the way out.
+    SetValidatorAllowlist {
+        validators: Vec<String>,
     },
-    AddValidator {
+    SetManagerLimits {
+        limits: ManagerLimits,
+    },
+    SetManager {
         address: String,
-        weight_bps: u16,
-    },
-    /// Move a validator to `Draining`.
-    RemoveValidator {
-        address: String,
-    },
-    /// Execute a rebalancing plan as redelegations.
-    Rebalance {
-        plan: Vec<RedelegateStep>,
     },
     SetTreasury {
         address: String,
     },
-    SetGov {
+    SetOwner {
         address: String,
     },
-    SetAdmin {
-        address: String,
-    },
+}
+
+/// Actions the manager may take.
+///
+/// Deliberately narrow. Nothing here changes code, changes who holds power, redirects the
+/// fee stream, or moves a token belonging to anyone.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ManagerMsg {
+    /// Set the target distribution across validators.
+    ///
+    /// Every address must be on the owner's allowlist, no single weight may exceed the
+    /// owner's ceiling, and the weights must sum to 10_000.
+    SetWeights { weights: Vec<ValidatorInit> },
+    /// Set the performance fee, up to the owner's ceiling.
+    SetPerformanceFee { bps: u16 },
+    /// Move stake between validators to approach the target weights.
+    Rebalance { plan: Vec<RedelegateStep> },
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]

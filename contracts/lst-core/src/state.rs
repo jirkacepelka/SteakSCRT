@@ -11,7 +11,7 @@ use secret_toolkit::storage::{AppendStore, Item, Keymap};
 use serde::{Deserialize, Serialize};
 
 use lst_types::core::types::{
-    ConfigResponse, ContractInfo, ProtocolParams, UnbondWindow, ValidatorEntry,
+    ConfigResponse, ContractInfo, ManagerLimits, ProtocolParams, UnbondWindow, ValidatorEntry,
 };
 
 use crate::error::ContractError;
@@ -24,6 +24,7 @@ pub const KEY_OPEN_WINDOW: &[u8] = b"open_window";
 pub const KEY_NEXT_WINDOW_ID: &[u8] = b"next_window_id";
 pub const KEY_SYNC_CURSOR: &[u8] = b"sync_cursor";
 pub const KEY_ACTIVE_WINDOWS: &[u8] = b"active_windows";
+pub const KEY_ALLOWLIST: &[u8] = b"validator_allowlist";
 pub const KEY_CLAIMS: &[u8] = b"claims";
 pub const KEY_CLAIM_INDEX: &[u8] = b"claim_index";
 
@@ -45,6 +46,12 @@ pub static SYNC_CURSOR: Item<u32> = Item::new(KEY_SYNC_CURSOR);
 /// plus however many matured windows still have unclaimed money. Keeping it separate
 /// means `CollectMatured` never has to walk every window ever opened.
 pub static ACTIVE_WINDOWS: Item<Vec<u64>> = Item::new(KEY_ACTIVE_WINDOWS);
+/// Validators the manager is permitted to assign weight to.
+///
+/// Kept separate from the working validator set: a validator dropped from the allowlist
+/// still holds stake and has to be drained, so the two lists legitimately diverge for
+/// weeks at a time.
+pub static ALLOWLIST: Item<Vec<String>, Json> = Item::new(KEY_ALLOWLIST);
 
 /// Per-user claim against a single window, stored under a per-address suffix.
 pub static CLAIMS: Keymap<u64, ClaimRecord> = Keymap::new(KEY_CLAIMS);
@@ -54,8 +61,11 @@ pub static CLAIM_INDEX: AppendStore<u64> = AppendStore::new(KEY_CLAIM_INDEX);
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
 pub struct Config {
-    pub admin: Addr,
-    pub gov: Addr,
+    /// Holds every power the manager does not.
+    pub owner: Addr,
+    /// Runs the protocol day to day, within `limits`.
+    pub manager: Addr,
+    pub limits: ManagerLimits,
     pub treasury: Addr,
     /// `None` until `RegisterToken` binds the derivative token. Deposits are refused
     /// while unset.
@@ -66,10 +76,12 @@ pub struct Config {
 }
 
 impl Config {
-    pub fn into_response(self) -> ConfigResponse {
+    pub fn into_response(self, allowlist: Vec<String>) -> ConfigResponse {
         ConfigResponse {
-            admin: self.admin,
-            gov: self.gov,
+            owner: self.owner,
+            manager: self.manager,
+            limits: self.limits,
+            validator_allowlist: allowlist,
             treasury: self.treasury,
             token: self.token,
             bonded_denom: self.bonded_denom,

@@ -6,22 +6,24 @@ use cosmwasm_std::{
 };
 
 use lst_types::core::msg::{
-    ExecuteAnswer, ExecuteMsg, InstantiateMsg, QueryAnswer, QueryMsg, ReceiveHookMsg,
+    ExecuteAnswer, ExecuteMsg, InstantiateMsg, ManagerMsg, MigrateMsg, OwnerMsg, QueryAnswer,
+    QueryMsg, ReceiveHookMsg,
 };
 use lst_types::core::types::{
-    ContractInfo, ProtocolParams, StateResponse, UnbondWindow, ValidatorEntry, ValidatorInit,
-    ValidatorStatus, WindowState,
+    ContractInfo, ManagerLimits, ProtocolParams, StateResponse, UnbondWindow, ValidatorEntry,
+    ValidatorInit, ValidatorStatus, WindowState,
 };
 use lst_types::token::{TokenExecuteMsg, TokenQueryAnswer, TokenQueryMsg};
 use secret_toolkit::utils::{HandleCallback, Query};
 
 use crate::error::ContractError;
 use crate::math::{
-    self, PoolTotals, CHAIN_MAX_UNBOND_ENTRIES, MAX_PERFORMANCE_FEE_BPS, RATE_SCALE,
+    self, PoolTotals, CHAIN_MAX_UNBOND_ENTRIES, MAX_PERFORMANCE_FEE_BPS, MAX_VALIDATOR_WEIGHT_BPS,
+    RATE_SCALE,
 };
 use crate::state::{
-    self, ClaimRecord, Config, TotalsCache, ACTIVE_WINDOWS, CONFIG, OPEN_WINDOW, SYNC_CURSOR,
-    TOTALS, VALIDATORS, WINDOWS,
+    self, ClaimRecord, Config, TotalsCache, ACTIVE_WINDOWS, ALLOWLIST, CONFIG, OPEN_WINDOW,
+    SYNC_CURSOR, TOTALS, VALIDATORS, WINDOWS,
 };
 use crate::{validators, windows};
 
@@ -53,13 +55,27 @@ pub fn instantiate(
     validate_params(&msg.params)?;
     validators::validate_set(&msg.validators)?;
 
-    let admin = optional_addr(deps.as_ref(), msg.admin, &info.sender)?;
-    let gov = optional_addr(deps.as_ref(), msg.gov, &info.sender)?;
+    validate_limits(&msg.limits)?;
+    validators::validate_managed_weights(
+        &msg.validators,
+        &msg.validator_allowlist,
+        msg.limits.max_validator_weight_bps,
+    )?;
+    if msg.params.performance_fee_bps > msg.limits.max_performance_fee_bps {
+        return Err(ContractError::FeeTooHigh {
+            got: msg.params.performance_fee_bps,
+            max: msg.limits.max_performance_fee_bps,
+        });
+    }
+
+    let owner = optional_addr(deps.as_ref(), msg.owner, &info.sender)?;
+    let manager = optional_addr(deps.as_ref(), msg.manager, &info.sender)?;
     let treasury = deps.api.addr_validate(&msg.treasury)?;
 
     let config = Config {
-        admin,
-        gov,
+        owner,
+        manager,
+        limits: msg.limits,
         treasury,
         // Bound by `Bootstrap`, which also seeds the pool.
         token: None,
@@ -69,6 +85,7 @@ pub fn instantiate(
     };
     CONFIG.save(deps.storage, &config)?;
 
+    ALLOWLIST.save(deps.storage, &msg.validator_allowlist)?;
     VALIDATORS.save(deps.storage, &initial_validator_set(msg.validators))?;
     SYNC_CURSOR.save(deps.storage, &0)?;
     ACTIVE_WINDOWS.save(deps.storage, &Vec::new())?;
@@ -93,8 +110,8 @@ pub fn instantiate(
 
     Ok(Response::new()
         .add_attribute("action", "instantiate")
-        .add_attribute("admin", config.admin)
-        .add_attribute("gov", config.gov))
+        .add_attribute("owner", config.owner)
+        .add_attribute("manager", config.manager))
 }
 
 #[entry_point]
@@ -121,6 +138,8 @@ pub fn execute(
         ExecuteMsg::Compound { limit } => execute_compound(deps, env, limit),
         ExecuteMsg::Sync { limit } => execute_sync(deps, env, limit),
         ExecuteMsg::SetPaused { paused } => execute_set_paused(deps, info, paused),
+        ExecuteMsg::Owner(m) => execute_owner(deps, env, info, m),
+        ExecuteMsg::Manager(m) => execute_manager(deps, env, info, m),
         _ => Err(ContractError::Std(StdError::generic_err(
             "not implemented yet",
         ))),
@@ -456,7 +475,7 @@ fn execute_bootstrap(
     token_code_hash: String,
 ) -> Result<Response, ContractError> {
     let mut config = CONFIG.load(deps.storage)?;
-    if info.sender != config.admin {
+    if info.sender != config.owner {
         return Err(ContractError::Unauthorized);
     }
     if config.token.is_some() {
@@ -794,13 +813,196 @@ fn execute_compound(
         })?))
 }
 
+/// Owner tier: everything the manager is not trusted with.
+fn execute_owner(
+    deps: DepsMut,
+    _env: Env,
+    info: MessageInfo,
+    msg: OwnerMsg,
+) -> Result<Response, ContractError> {
+    let mut config = CONFIG.load(deps.storage)?;
+    if info.sender != config.owner {
+        return Err(ContractError::Unauthorized);
+    }
+
+    match msg {
+        OwnerMsg::UpdateParams { params } => {
+            validate_params(&params)?;
+            // The fee lives in params but is bounded by the manager's ceiling, so the
+            // owner cannot accidentally leave a fee in place that the manager could not
+            // have set themselves.
+            if params.performance_fee_bps > config.limits.max_performance_fee_bps {
+                return Err(ContractError::FeeTooHigh {
+                    got: params.performance_fee_bps,
+                    max: config.limits.max_performance_fee_bps,
+                });
+            }
+            config.params = params;
+        }
+
+        OwnerMsg::SetValidatorAllowlist { validators } => {
+            ALLOWLIST.save(deps.storage, &validators)?;
+
+            // Anything no longer allowed stops receiving stake immediately and is drained
+            // first. It cannot simply be dropped: its stake is still delegated and takes
+            // an unbonding period to recover.
+            let mut set = VALIDATORS.load(deps.storage)?;
+            for entry in set.iter_mut() {
+                if !validators.iter().any(|a| a == &entry.address) {
+                    entry.weight_bps = 0;
+                    entry.status = if entry.bonded.is_zero() {
+                        ValidatorStatus::Removed
+                    } else {
+                        ValidatorStatus::Draining
+                    };
+                }
+            }
+            VALIDATORS.save(deps.storage, &set)?;
+        }
+
+        OwnerMsg::SetManagerLimits { limits } => {
+            validate_limits(&limits)?;
+            config.limits = limits;
+        }
+        OwnerMsg::SetManager { address } => {
+            config.manager = deps.api.addr_validate(&address)?;
+        }
+        OwnerMsg::SetTreasury { address } => {
+            config.treasury = deps.api.addr_validate(&address)?;
+        }
+        OwnerMsg::SetOwner { address } => {
+            config.owner = deps.api.addr_validate(&address)?;
+        }
+    }
+
+    CONFIG.save(deps.storage, &config)?;
+    Ok(Response::new()
+        .add_attribute("action", "owner")
+        .set_data(to_binary(&ExecuteAnswer::Ok {})?))
+}
+
+/// Manager tier: fees and validator distribution, nothing else.
+fn execute_manager(
+    deps: DepsMut,
+    _env: Env,
+    info: MessageInfo,
+    msg: ManagerMsg,
+) -> Result<Response, ContractError> {
+    let mut config = CONFIG.load(deps.storage)?;
+    if info.sender != config.manager {
+        return Err(ContractError::Unauthorized);
+    }
+
+    let mut messages: Vec<CosmosMsg> = Vec::new();
+
+    match msg {
+        ManagerMsg::SetWeights { weights } => {
+            let allowlist = ALLOWLIST.may_load(deps.storage)?.unwrap_or_default();
+            validators::validate_managed_weights(
+                &weights,
+                &allowlist,
+                config.limits.max_validator_weight_bps,
+            )?;
+
+            let mut set = VALIDATORS.load(deps.storage)?;
+            validators::apply_weights(&mut set, &weights);
+            VALIDATORS.save(deps.storage, &set)?;
+        }
+
+        ManagerMsg::SetPerformanceFee { bps } => {
+            if bps > config.limits.max_performance_fee_bps {
+                return Err(ContractError::FeeTooHigh {
+                    got: bps,
+                    max: config.limits.max_performance_fee_bps,
+                });
+            }
+            config.params.performance_fee_bps = bps;
+            CONFIG.save(deps.storage, &config)?;
+        }
+
+        ManagerMsg::Rebalance { plan } => {
+            let mut set = VALIDATORS.load(deps.storage)?;
+            let allowlist = ALLOWLIST.may_load(deps.storage)?.unwrap_or_default();
+
+            for step in &plan {
+                // Redelegating *to* somewhere off the allowlist would route stake to a
+                // validator the owner never approved — the same escape the weight check
+                // closes, reached by a different door.
+                if !allowlist.iter().any(|a| a == &step.dst_validator) {
+                    return Err(ContractError::ValidatorNotAllowed {
+                        address: step.dst_validator.clone(),
+                    });
+                }
+
+                let src = set
+                    .iter()
+                    .position(|v| v.address == step.src_validator)
+                    .ok_or_else(|| ContractError::UnknownValidator {
+                        address: step.src_validator.clone(),
+                    })?;
+
+                if set[src].bonded < step.amount {
+                    return Err(ContractError::InsufficientBalance {
+                        needed: step.amount,
+                        available: set[src].bonded,
+                    });
+                }
+                set[src].bonded -= step.amount;
+
+                match set.iter().position(|v| v.address == step.dst_validator) {
+                    Some(dst) => set[dst].bonded += step.amount,
+                    None => {
+                        return Err(ContractError::UnknownValidator {
+                            address: step.dst_validator.clone(),
+                        })
+                    }
+                }
+
+                messages.push(CosmosMsg::Staking(StakingMsg::Redelegate {
+                    src_validator: step.src_validator.clone(),
+                    dst_validator: step.dst_validator.clone(),
+                    amount: Coin {
+                        denom: config.bonded_denom.clone(),
+                        amount: step.amount,
+                    },
+                }));
+            }
+
+            VALIDATORS.save(deps.storage, &set)?;
+        }
+    }
+
+    Ok(Response::new()
+        .add_messages(messages)
+        .add_attribute("action", "manager")
+        .set_data(to_binary(&ExecuteAnswer::Ok {})?))
+}
+
+/// Reject manager limits that exceed what the code itself permits.
+///
+/// Governance can tighten these but never loosen them past the compiled ceilings. Raising
+/// the hard limits requires shipping new code, which is a visible, reviewable event rather
+/// than a parameter flip.
+fn validate_limits(limits: &ManagerLimits) -> Result<(), ContractError> {
+    if limits.max_performance_fee_bps > MAX_PERFORMANCE_FEE_BPS
+        || limits.max_validator_weight_bps > MAX_VALIDATOR_WEIGHT_BPS
+        || limits.max_validator_weight_bps == 0
+    {
+        return Err(ContractError::LimitsExceedCode);
+    }
+    Ok(())
+}
+
 fn execute_set_paused(
     deps: DepsMut,
     info: MessageInfo,
     paused: bool,
 ) -> Result<Response, ContractError> {
     let mut config = CONFIG.load(deps.storage)?;
-    if info.sender != config.admin {
+    // Both tiers may pause. Pausing blocks deposits only, so a rogue manager can turn
+    // away new money but cannot trap anyone's funds — and the owner answers that by
+    // replacing them.
+    if info.sender != config.owner && info.sender != config.manager {
         return Err(ContractError::Unauthorized);
     }
     config.paused = paused;
@@ -816,7 +1018,8 @@ pub fn query(deps: Deps, env: Env, msg: QueryMsg) -> StdResult<Binary> {
     match msg {
         QueryMsg::Config {} => {
             let config = CONFIG.load(deps.storage)?;
-            to_binary(&QueryAnswer::Config(config.into_response()))
+            let allowlist = ALLOWLIST.may_load(deps.storage)?.unwrap_or_default();
+            to_binary(&QueryAnswer::Config(config.into_response(allowlist)))
         }
         QueryMsg::State {} => to_binary(&QueryAnswer::State(query_state(deps, &env)?)),
         QueryMsg::ExchangeRate {} => {
@@ -1031,3 +1234,16 @@ fn validate_params(params: &ProtocolParams) -> Result<(), ContractError> {
 
 /// Convenience constant for callers that want the rate's fixed-point scale.
 pub const EXCHANGE_RATE_SCALE: u128 = RATE_SCALE;
+
+/// Code upgrade.
+///
+/// Migration is authorised by the *contract admin*, which is chain-level state rather than
+/// anything this contract stores — so who may upgrade is decided outside this code
+/// entirely. That is deliberate: it is the one power that can rewrite every other rule,
+/// and it should not sit behind a flag the contract itself can flip.
+#[entry_point]
+pub fn migrate(_deps: DepsMut, _env: Env, msg: MigrateMsg) -> Result<Response, ContractError> {
+    match msg {
+        MigrateMsg::Noop {} => Ok(Response::new().add_attribute("action", "migrate")),
+    }
+}

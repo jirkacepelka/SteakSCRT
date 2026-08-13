@@ -167,11 +167,33 @@ pub struct ProtocolParams {
     pub max_unbond_entries_per_validator: u8,
 }
 
+/// Bounds the owner places on the manager.
+///
+/// The manager runs the protocol day to day and must never be able to extract value from
+/// it. The fee ceiling is the obvious half. The weight ceiling is the half that matters
+/// more: without it a manager could route the entire stake to a validator they operate and
+/// take the whole yield as validator commission, having never touched a single user token.
+/// The allowlist closes the same hole from the other side — the manager picks *among* the
+/// owner's validators, never *which* validators exist.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
+pub struct ManagerLimits {
+    /// Highest performance fee the manager may set.
+    pub max_performance_fee_bps: u16,
+    /// Largest share of stake any single validator may be assigned.
+    pub max_validator_weight_bps: u16,
+}
+
 /// Public, unauthenticated view of the protocol's configuration.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
 pub struct ConfigResponse {
-    pub admin: Addr,
-    pub gov: Addr,
+    /// Holds every power the manager does not: parameters, the treasury address, the
+    /// validator allowlist, and who the manager is.
+    pub owner: Addr,
+    /// Sets the fee and the distribution across validators, within the owner's limits.
+    pub manager: Addr,
+    pub limits: ManagerLimits,
+    /// Validators the manager may assign weight to.
+    pub validator_allowlist: Vec<String>,
     pub treasury: Addr,
     pub token: Option<ContractInfo>,
     pub bonded_denom: String,

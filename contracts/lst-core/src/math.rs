@@ -26,6 +26,14 @@ pub const RATE_SCALE: u128 = 1_000_000_000_000_000_000;
 /// silent parameter flip.
 pub const MAX_PERFORMANCE_FEE_BPS: u16 = 2_000; // 20%
 
+/// Hardest ceiling on any single validator's share of the stake.
+///
+/// Concentration is the failure this protocol is meant to avoid, and the incumbent routes
+/// 64% of its stake to one operator. Capping it in code rather than in configuration means
+/// raising it is a code change an auditor can see, not a parameter the manager or even the
+/// owner can quietly flip.
+pub const MAX_VALIDATOR_WEIGHT_BPS: u16 = 2_500; // 25%
+
 /// The chain's `max_entries` staking parameter: concurrent unbonding entries permitted
 /// per (delegator, validator) pair. The protocol must stay strictly below it.
 pub const CHAIN_MAX_UNBOND_ENTRIES: u8 = 7;
