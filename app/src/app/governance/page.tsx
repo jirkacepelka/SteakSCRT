@@ -16,11 +16,11 @@ import {
   type ValidatorEntry,
 } from "@/lib/protocol";
 
-type Audience = "network" | "manager";
+type Audience = "onchain" | "governor";
 
 export default function GovernancePage() {
   const { connection, address } = useWallet();
-  const [audience, setAudience] = useState<Audience>("network");
+  const [audience, setAudience] = useState<Audience>("onchain");
   const [config, setConfig] = useState<Config | null>(null);
   const [validators, setValidators] = useState<ValidatorEntry[]>([]);
 
@@ -38,22 +38,16 @@ export default function GovernancePage() {
 
   return (
     <div>
-      <div className="toggle">
-        <button
-          aria-pressed={audience === "network"}
-          onClick={() => setAudience("network")}
-        >
-          Network proposal
+      <div className="segmented" style={{ marginBottom: 22 }}>
+        <button aria-pressed={audience === "onchain"} onClick={() => setAudience("onchain")}>
+          Onchain
         </button>
-        <button
-          aria-pressed={audience === "manager"}
-          onClick={() => setAudience("manager")}
-        >
-          Manager
+        <button aria-pressed={audience === "governor"} onClick={() => setAudience("governor")}>
+          Governor
         </button>
       </div>
 
-      {audience === "network" ? (
+      {audience === "onchain" ? (
         <NetworkProposals config={config} />
       ) : (
         <ManagerConsole
@@ -122,9 +116,9 @@ function NetworkProposals({ config }: { config: Config | null }) {
   const json = JSON.stringify(proposal, null, 2);
 
   return (
-    <div className="grid">
-      <div className="card">
-        <p className="card-title">Propose a code upgrade</p>
+    <div className="grid-2">
+      <div className="panel">
+        <p className="h2">Propose a code upgrade</p>
 
         <label className="field">
           <span>Contract</span>
@@ -154,7 +148,7 @@ function NetworkProposals({ config }: { config: Config | null }) {
           <textarea
             value={description}
             onChange={(e) => setDescription(e.target.value)}
-            style={{ minHeight: 90 }}
+            
           />
         </label>
 
@@ -166,8 +160,8 @@ function NetworkProposals({ config }: { config: Config | null }) {
       </div>
 
       <div>
-        <div className="card card--dark">
-          <p className="card-title">Proposal JSON</p>
+        <div className="panel">
+          <p className="h2">Proposal JSON</p>
           <pre className="payload">{json}</pre>
           <button
             className="btn"
@@ -186,8 +180,8 @@ function NetworkProposals({ config }: { config: Config | null }) {
           </p>
         </div>
 
-        <div className="card card--queue">
-          <p className="card-title">Why only upgrades</p>
+        <div className="panel">
+          <p className="h2">Why only upgrades</p>
           <p className="note">
             Chain governance cannot call this contract. Secret&apos;s compute module
             authenticates every message against the signature of the transaction carrying
@@ -208,8 +202,8 @@ function NetworkProposals({ config }: { config: Config | null }) {
         </div>
 
         {config && (
-          <div className="card">
-            <p className="card-title">What a vote would be changing</p>
+          <div className="panel">
+            <p className="h2">What a vote would be changing</p>
             <div className="row">
               <span className="k">Manager</span>
               <span className="v">{shortAddress(config.manager)}</span>
@@ -306,15 +300,15 @@ function ManagerConsole({
     }
   };
 
-  if (!config) return <div className="card">Loading…</div>;
+  if (!config) return <div className="panel">Loading…</div>;
 
   const locked = !connection || !isManager;
 
   return (
-    <div className="grid">
+    <div className="grid-2">
       <div>
-        <div className="card">
-          <p className="card-title">Validator distribution</p>
+        <div className="panel">
+          <p className="h2">Validator distribution</p>
 
           <table className="plain">
             <thead>
@@ -407,8 +401,8 @@ function ManagerConsole({
           </button>
         </div>
 
-        <div className="card">
-          <p className="card-title">Rebalance</p>
+        <div className="panel">
+          <p className="h2">Rebalance</p>
           <p className="note" style={{ marginTop: 0, marginBottom: 16 }}>
             Moves stake that is already delegated. New deposits drift toward the target
             weights on their own, so this is for correcting a set that has already gone out
@@ -482,8 +476,8 @@ function ManagerConsole({
       </div>
 
       <div>
-        <div className="card card--yield">
-          <p className="card-title">Performance fee</p>
+        <div className="panel">
+          <p className="h2">Performance fee</p>
           <div className="amount" style={{ borderBottomColor: "rgba(0,0,0,0.08)" }}>
             <input
               inputMode="decimal"
@@ -512,9 +506,9 @@ function ManagerConsole({
           </button>
         </div>
 
-        <div className={config.paused ? "card card--warn" : "card"}>
-          <p className="card-title">Deposits</p>
-          <p className="big">{config.paused ? "Paused" : "Open"}</p>
+        <div className="panel">
+          <p className="h2">Deposits</p>
+          <p className="stat-value numeral">{config.paused ? "Paused" : "Open"}</p>
           <p className="note">
             Pausing blocks new deposits only. Claims on matured windows are never pausable,
             so this cannot trap anyone&apos;s funds.
@@ -532,8 +526,8 @@ function ManagerConsole({
           </button>
         </div>
 
-        <div className="card card--dark">
-          <p className="card-title">Who you are signing as</p>
+        <div className="panel">
+          <p className="h2">Who you are signing as</p>
           <div className="row">
             <span className="k">Manager on chain</span>
             <span className="v">{shortAddress(config.manager)}</span>

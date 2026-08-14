@@ -1,68 +1,86 @@
 # Frontend design language
 
-Requested reference: `app.olla.finance/stake` (Aztec liquid staking).
+The design is the user's own, drawn in Penpot and read out of the exported file rather
+than approximated from a screenshot. This document records what the file specifies, so a
+later change to the app can be checked against the design instead of against taste.
 
-We match the **structural and visual language**, not the branding. Olla's palette and
-wordmark are theirs; cloning them would make our app look like an Olla product. What we
-take is the layout grammar and the material feel, with our own accent colours.
+Source: `Untitled (3).penpot`, read with the `penpot-files` skill (`tokens`, then
+`context` per page). Everything below is transcribed from it; the *reasoning* is ours.
 
-## What the reference does
+## Tokens
 
-Measured from the live page:
+Transcribed into `app/src/app/globals.css` as custom properties.
 
-| Role | Value |
-|---|---|
-| Page shell | `#111111`, very dark, edge to edge |
-| Primary card | `#F8F7F0` warm cream, `border-radius: 30px` |
-| Secondary cards | pastels — `#FFD8F8` pink, `#C8F2F6` cyan |
-| Primary action | `#FFB0F1` pink, fully rounded pill, dark magenta `#78175C` text |
-| Badge / chip | `#ECEBE5`, `border-radius: 46px` |
-| Hairline on dark | `#313131` |
-| Accent hairline | `#FE74E2` |
-| Type | "Season Sans", falling back to the system sans stack |
-
-Layout is two columns: one tall primary card (~544px) for the action, and a stack of
-shorter cards (~340px) beside it for derived figures.
-
-## What we build
-
-Same grammar:
-
-- Dark shell, large warm-cream primary card, pastel secondary cards, pill buttons.
-- Generous radii (30px cards, full-round buttons), hairline dividers, no drop shadows.
-- Numbers are the loudest thing on the page; labels are small and quiet.
-
-Our palette, chosen to sit next to Secret Network's identity rather than Olla's:
-
-| Token | Light surface | Note |
+| Token | Value | Role |
 |---|---|---|
-| `--shell` | `#101211` | near-black with a green cast |
-| `--card` | `#F7F6F1` | warm cream, unchanged in spirit |
-| `--accent` | `#7FE3B0` | Secret's green, used for the primary pill |
-| `--accent-ink` | `#0C3B26` | text on the accent pill |
-| `--card-yield` | `#DCF6E7` | pale green, the returns card |
-| `--card-queue` | `#DDECF6` | pale blue, the withdrawal-queue card |
-| `--hairline` | `#2A2E2C` | on dark |
+| `--bg` | `#0a0a0a` | page ground |
+| `--panel` | `#121212` | the one opaque surface — tooltips, code blocks, select menus |
+| `--surface-1` | `rgba(255,255,255,.05)` | panels and stat tiles |
+| `--surface-2` | `rgba(255,255,255,.10)` | inputs, chips, the nav bar |
+| `--hairline` | `rgba(255,255,255,.12)` | rules and table borders |
+| `--ink` / `--ink-quiet` / `--ink-faint` | `#fff` / white 55% / white 35% | three levels of text |
+| `--accent` | `#81d0eb` | every action, and every data mark |
+| `--accent-ink` | `#0a0a0a` | text on the accent |
+| `--good` / `--warn` / `--bad` | `#7fdca4` / `#e8c07d` / `#ef8b7b` | state only, never a data series |
+| `--r-lg` / `--r-md` / `--r-pill` | `15px` / `10px` / `1000px` | the three radii in the file |
+| `--shell-w` | `1000px` | content column |
+
+Type is **Geist**, 700 for anything structural, tabular numerals wherever a figure could
+be compared to the one above it (`.numeral`).
+
+Surfaces are white at 5% and 10% over near-black rather than three separate greys. Panels
+therefore read as depth rather than as boxes, and a panel nested in a panel still works —
+which is what lets the staking form and the withdrawal table sit in the same column
+without a border between them.
+
+## Structure
+
+Nav bar (`--surface-2`, `--r-lg`) holding the wordmark and three tabs — **Staking**,
+**Statistics**, **Governance** — with the active one underlined in the accent rather than
+filled. Below it a `--shell-w` column, mostly a two-up grid that collapses to one at
+820px.
+
+Three tabs is the whole app. An earlier build had Portfolio and Validators as separate
+pages; the design has neither, so claims fold into the staking page beside the form (you
+look at them for the same reason you came) and the validator set moved to Statistics
+(you look at it to judge the protocol, not to act).
+
+## Colour in the charts
+
+One accent, no categorical palette. A line chart with a single series needs no legend —
+the panel heading names it — and the validator bars carry identity in the label beside
+each bar. Introducing a second hue would mean inventing a categorical ramp that has to
+survive a colourblindness check, to encode something the labels already encode.
+
+`--good`/`--warn`/`--bad` stay reserved for state: a stale-totals warning, a claim that
+is ready. If one of them ever appears in a chart, the chart is wrong.
 
 ## Screens
 
-**Stake.** Amount input with 25/50/75/Max chips, balance, live conversion to dSCRT, the
-exchange rate, and the estimated return card (Daily / Monthly / Yearly toggle).
+**Staking.** Stake/Unstake segmented toggle, amount field with 25/50/75/Max chips,
+balance, live conversion, exchange rate and fee. Beside it: when a withdrawal requested
+now would actually pay out, the user's own claims (behind a permit), and the privacy note.
 
-**Unstake.** Same shape, plus the thing Olla does not have to show and we do: the
-withdrawal is batched into a window. The card states plainly which window the request
-joins, when that window closes, and the date the SCRT becomes claimable — 21 days at
-best, 26 at worst. Hiding that behind an "unstake" button would be the single most
-misleading thing this UI could do.
+The maturity panel is stated on the screen rather than in a tooltip. Someone pressing
+"unstake" expecting a swap, and finding their money gone for three weeks, has been misled
+by the interface rather than by the chain — so the window it joins, the date it closes,
+and the date it becomes claimable are all on the page before they sign.
 
-**Portfolio.** dSCRT balance behind a permit, its SCRT value, and a list of pending
-claims with their maturity dates and a claim button per matured window.
+**Statistics.** TVL, exchange rate, an APY *observed from the rate's own history* rather
+than quoted from the nominal staking APR, and supply. Then a TVL chart and a rate chart,
+both replayed from the chain at past block heights (`app/src/lib/history.ts`) because the
+contract stores no history and we did not want an indexer. Then validator distribution
+against the 25% ceiling, the withdrawal queue, and the protocol parameters.
 
-**Validators.** The set and its weights, published rather than buried. This is the
-differentiator against the incumbent, whose set routes 64% to a single operator.
+TVL is SCRT-denominated only. A USD line would move with the SCRT price and read as
+protocol growth, which it is not.
+
+**Governance.** One toggle, **Onchain | Governor**, because the page serves two audiences.
+Onchain builds the proposal JSON a voter submits; Governor is the manager's console —
+weights, rebalance, fee, pause — and shows who the manager is even when you are not them.
 
 ## Non-negotiable copy
 
-The privacy disclaimer from the README appears in the UI, not only in the docs: dSCRT
-balances and transfers are private; deposits, withdrawals, the exchange rate and TVL are
-public. Users must not infer more privacy than the chain actually gives them.
+The privacy disclaimer appears in the UI, not only in the docs: dSCRT balances and
+transfers are private; deposits, withdrawals, the exchange rate and TVL are public.
+Users must not infer more privacy than the chain actually gives them.

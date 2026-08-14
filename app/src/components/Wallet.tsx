@@ -71,7 +71,7 @@ export function ConnectButton() {
 
   return (
     <button
-      className="btn btn--connect"
+      className="btn btn--sm"
       onClick={connectWallet}
       disabled={connecting}
       title={error ?? undefined}
