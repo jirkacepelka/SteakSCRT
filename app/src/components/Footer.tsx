@@ -4,7 +4,7 @@ export function Footer() {
       <a href="https://github.com/jirkacepelka/SteakSCRT" target="_blank" rel="noreferrer">
         Github
       </a>
-      <span>V0.1</span>
+      <span className="version">V0.1</span>
     </footer>
   );
 }

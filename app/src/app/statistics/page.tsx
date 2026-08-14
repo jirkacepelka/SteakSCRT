@@ -3,7 +3,8 @@
 import { useEffect, useMemo, useState } from "react";
 
 import { BarList, LineChart } from "@/components/Chart";
-import { fromMicro, rateToNumber, shortAddress, whenFrom } from "@/lib/chain";
+import { Unconfigured } from "@/components/Unconfigured";
+import { CONFIGURED, fromMicro, rateToNumber, shortAddress, whenFrom } from "@/lib/chain";
 import { fetchHistory, type History, type Range } from "@/lib/history";
 import {
   fetchConfig,
@@ -29,6 +30,7 @@ export default function StatisticsPage() {
   const [loadingHistory, setLoadingHistory] = useState(true);
 
   useEffect(() => {
+    if (!CONFIGURED) return;
     void (async () => {
       const [s, c, v, w] = await Promise.all([
         fetchState(),
@@ -44,6 +46,7 @@ export default function StatisticsPage() {
   }, []);
 
   useEffect(() => {
+    if (!CONFIGURED) return;
     let cancelled = false;
     setLoadingHistory(true);
     void fetchHistory(range)
@@ -119,6 +122,8 @@ export default function StatisticsPage() {
       Number(state.liquid_unallocated)
     : 0;
 
+  if (!CONFIGURED) return <Unconfigured />;
+
   return (
     <div>
       <div
@@ -132,7 +137,7 @@ export default function StatisticsPage() {
         }}
       >
         <h1 className="h1">Statistics</h1>
-        <div className="segmented">
+        <div className="segmented segmented--auto">
           {RANGES.map((r) => (
             <button key={r} aria-pressed={range === r} onClick={() => setRange(r)}>
               {r}

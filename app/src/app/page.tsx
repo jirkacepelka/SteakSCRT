@@ -3,8 +3,10 @@
 import { useEffect, useMemo, useState } from "react";
 
 import { Status, readable, type Feedback } from "@/components/Status";
+import { Unconfigured } from "@/components/Unconfigured";
 import { useWallet } from "@/components/Wallet";
 import {
+  CONFIGURED,
   fromMicro,
   getPermit,
   rateToNumber,
@@ -54,6 +56,7 @@ export default function StakingPage() {
   };
 
   useEffect(() => {
+    if (!CONFIGURED) return;
     void refresh();
     const timer = setInterval(() => void refresh(), 30_000);
     return () => clearInterval(timer);
@@ -151,32 +154,25 @@ export default function StakingPage() {
     }
   };
 
+  if (!CONFIGURED) return <Unconfigured />;
+
   const busy = feedback.kind === "busy";
   const stale = state?.is_stale ?? false;
+  const symbol = mode === "stake" ? "SCRT" : "dSCRT";
 
   return (
-    <div className="grid-2">
-      <div>
-        <div className="panel" style={{ padding: 0, background: "transparent" }}>
-          <div className="segmented" style={{ display: "flex", width: "100%" }}>
-            <button
-              style={{ flex: 1 }}
-              aria-pressed={mode === "stake"}
-              onClick={() => setMode("stake")}
-            >
-              Stake
-            </button>
-            <button
-              style={{ flex: 1 }}
-              aria-pressed={mode === "unstake"}
-              onClick={() => setMode("unstake")}
-            >
-              Unstake
-            </button>
-          </div>
+    <div className="center-block">
+      <div className="stack">
+        <div className="segmented">
+          <button aria-pressed={mode === "stake"} onClick={() => setMode("stake")}>
+            Stake
+          </button>
+          <button aria-pressed={mode === "unstake"} onClick={() => setMode("unstake")}>
+            Unstake
+          </button>
         </div>
 
-        <div className="panel" style={{ marginTop: 16 }}>
+        <div className="panel" style={{ display: "flex", flexDirection: "column", gap: 5 }}>
           <p className="label">{mode === "stake" ? "You stake" : "You return"}</p>
 
           <div className="amount">
@@ -187,206 +183,211 @@ export default function StakingPage() {
               onChange={(e) => setAmount(e.target.value.replace(/[^\d.]/g, ""))}
             />
             <span className="denom">
-              <span className="denom-mark">{mode === "stake" ? "S" : "d"}</span>
-              {mode === "stake" ? "SCRT" : "dSCRT"}
+              {/* One mark for both sides: dSCRT is a claim on SCRT, not a separate asset. */}
+              <img className="denom-mark" src="/brand/scrt.png" alt="" width={30} height={30} />
+              {symbol}
             </span>
           </div>
 
-          {balance && (
-            <p className="stat-note" style={{ marginTop: 10 }}>
-              Balance {fromMicro(balance)} {mode === "stake" ? "SCRT" : "dSCRT"}
-              {mode === "stake" && " · Max leaves 0.5 for gas"}
-            </p>
-          )}
-
-          <div className="chips">
-            {([25, 50, 75, 100] as const).map((pct) => (
-              <button
-                key={pct}
-                className="chip"
-                disabled={!balance || balance === "0"}
-                onClick={() => {
-                  if (!balance) return;
-                  // Leave a little SCRT behind on Max so the transaction can still pay its
-                  // own gas; spending the lot is a footgun, not a feature.
-                  const reserve = mode === "stake" && pct === 100 ? 500_000n : 0n;
-                  const usable = BigInt(balance) > reserve ? BigInt(balance) - reserve : 0n;
-                  setAmount((Number((usable * BigInt(pct)) / 100n) / 1e6).toFixed(6));
-                }}
-              >
-                {pct === 100 ? "Max" : `${pct}%`}
-              </button>
-            ))}
-          </div>
-
-          <hr className="rule" />
-
-          <div className="row">
-            <span className="k">You receive</span>
-            <span className="v numeral">
-              {converted.toFixed(6)} {mode === "stake" ? "dSCRT" : "SCRT"}
-            </span>
-          </div>
-          <div className="row">
-            <span className="k">Exchange rate</span>
-            <span className="v numeral">1 dSCRT = {rate.toFixed(5)} SCRT</span>
-          </div>
-          <div className="row">
-            <span className="k">Performance fee</span>
-            <span className="v numeral">
-              {config ? `${config.params.performance_fee_bps / 100}%` : "—"}
-            </span>
-          </div>
-
-          {stale && (
-            <div className="status status--err">
-              Cached totals are stale, so deposits and withdrawals are refused until someone
-              runs a sync. Nobody&apos;s funds are at risk — the contract is refusing to
-              price against figures it no longer trusts.
-            </div>
-          )}
-
-          <button
-            className="btn"
-            style={{ marginTop: 18 }}
-            onClick={submit}
-            disabled={!connection || busy || stale || !amount}
-          >
-            {!connection
-              ? "Connect wallet"
-              : busy
-                ? "Confirm in wallet…"
-                : mode === "stake"
-                  ? "Stake"
-                  : "Request withdrawal"}
-          </button>
-
-          <Status feedback={feedback} />
+          <p className="label">
+            {balance
+              ? `Balance ${fromMicro(balance)} ${symbol}`
+              : connection
+                ? "—"
+                : "Connect to see your balance"}
+          </p>
         </div>
-      </div>
 
-      <div>
+        <div className="chips">
+          {([25, 50, 75, 100] as const).map((pct) => (
+            <button
+              key={pct}
+              className="chip"
+              disabled={!balance || balance === "0"}
+              onClick={() => {
+                if (!balance) return;
+                // Leave a little SCRT behind on Max so the transaction can still pay its
+                // own gas; spending the lot is a footgun, not a feature.
+                const reserve = mode === "stake" && pct === 100 ? 500_000n : 0n;
+                const usable = BigInt(balance) > reserve ? BigInt(balance) - reserve : 0n;
+                setAmount((Number((usable * BigInt(pct)) / 100n) / 1e6).toFixed(6));
+              }}
+            >
+              {pct === 100 ? "Max" : `${pct}%`}
+            </button>
+          ))}
+        </div>
+
+        <hr className="rule" />
+
+        <div className="row">
+          <span className="k">You receive</span>
+          <span className="v numeral">
+            {converted.toFixed(6)} {mode === "stake" ? "dSCRT" : "SCRT"}
+          </span>
+        </div>
+        <div className="row">
+          <span className="k">Exchange rate</span>
+          <span className="v numeral">1 dSCRT = {rate.toFixed(5)} SCRT</span>
+        </div>
+        <div className="row">
+          <span className="k">Performance fee</span>
+          <span className="v numeral">
+            {config ? `${config.params.performance_fee_bps / 100}%` : "—"}
+          </span>
+        </div>
         {mode === "unstake" && (
-          <div className="panel">
-            <h2 className="h2">When you get paid</h2>
-            <span className="stat-value numeral">
-              {config
-                ? `${Math.round(config.params.unbonding_period_secs / 86_400)}–${Math.round(
-                    (config.params.unbonding_period_secs + config.params.unbond_window_secs) /
-                      86_400,
-                  )}`
-                : "—"}
-              <span className="stat-unit">days</span>
-            </span>
-            {maturity && (
-              <div style={{ marginTop: 14 }}>
-                <div className="row">
-                  <span className="k">Joins window</span>
-                  <span className="v numeral">#{maturity.windowId}</span>
-                </div>
-                <div className="row">
-                  <span className="k">Window closes</span>
-                  <span className="v">{untilFrom(maturity.closes)}</span>
-                </div>
-                <div className="row">
-                  <span className="k">Claimable from</span>
-                  <span className="v">{whenFrom(maturity.matures)}</span>
-                </div>
-              </div>
-            )}
-            <p className="note">
-              Withdrawals are batched. Cosmos allows seven concurrent unbonding entries per
-              validator and this protocol is a single delegator, so requests pool into
-              windows and one undelegation per validator goes out when a window closes.
-            </p>
+          <div className="row">
+            <span className="k">Claimable from</span>
+            <span className="v">{maturity ? whenFrom(maturity.matures) : "—"}</span>
           </div>
         )}
 
-        <div className="panel">
-          <h2 className="h2">Your withdrawals</h2>
+        {stale && (
+          <div className="status status--err">
+            Cached totals are stale, so deposits and withdrawals are refused until someone
+            runs a sync. Nobody&apos;s funds are at risk — the contract is refusing to price
+            against figures it no longer trusts.
+          </div>
+        )}
 
-          {!connection ? (
-            <p className="note" style={{ marginTop: 0 }}>
-              Connect a wallet to see your position. Claims are private contract state, read
-              with a permit you sign rather than with anything stored here.
-            </p>
-          ) : !claims ? (
-            <>
-              <p className="note" style={{ marginTop: 0, marginBottom: 14 }}>
-                One signature covers the whole app. It is a signature rather than a
-                transaction, so it costs nothing.
-              </p>
-              <button className="btn btn--ghost btn--sm" onClick={loadClaims} disabled={busy}>
-                Sign permit
-              </button>
-            </>
-          ) : claims.claims.length === 0 ? (
-            <p className="note" style={{ marginTop: 0 }}>
-              No withdrawal requests yet.
-            </p>
-          ) : (
-            <>
-              <table className="plain">
-                <thead>
-                  <tr>
-                    <th>Window</th>
-                    <th>Amount</th>
-                    <th>Ready</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {claims.claims.map((c) => (
-                    <tr key={c.window_id}>
-                      <td className="numeral">#{c.window_id}</td>
-                      <td className="numeral">{fromMicro(c.scrt_owed)}</td>
-                      <td>
-                        {c.claimed ? (
-                          <span className="pill">paid</span>
-                        ) : c.state === "matured" ? (
-                          <span className="pill pill--live">now</span>
-                        ) : (
-                          <span className="pill">
-                            {c.matures_at ? untilFrom(c.matures_at) : "queued"}
-                          </span>
-                        )}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+        <button
+          className="btn"
+          onClick={submit}
+          disabled={!connection || busy || stale || !amount}
+        >
+          {!connection
+            ? "Connect wallet"
+            : busy
+              ? "Confirm in wallet…"
+              : mode === "stake"
+                ? "Stake"
+                : "Request withdrawal"}
+        </button>
 
-              <button
-                className="btn"
-                style={{ marginTop: 16 }}
-                onClick={claim}
-                disabled={claims.total_claimable_now === "0" || busy}
-              >
-                {claims.total_claimable_now === "0"
-                  ? "Nothing to claim yet"
-                  : `Claim ${fromMicro(claims.total_claimable_now)} SCRT`}
-              </button>
-              <p className="note">
-                Amounts are what each window will actually pay. If a validator was slashed
-                while a window was unbonding, the shortfall is shared across everyone in it.
-              </p>
-            </>
-          )}
-        </div>
+        {feedback.kind !== "idle" && <Status feedback={feedback} />}
 
-        <div className="panel">
-          <h2 className="h2">What is and is not private</h2>
-          <p className="note" style={{ marginTop: 0 }}>
-            <strong style={{ color: "var(--ink)" }}>Private:</strong> your dSCRT balance and
-            transfers, and the link between a deposit and whoever ends up holding it.
-          </p>
-          <p className="note">
-            <strong style={{ color: "var(--ink)" }}>Public:</strong> deposits and
-            withdrawals, the protocol&apos;s delegations, the exchange rate, and every
-            window&apos;s size. Secret encrypts contract state, not the bank or staking
-            modules.
-          </p>
-        </div>
+        {mode === "unstake" && (
+          <Withdrawals
+            config={config}
+            claims={claims}
+            connected={Boolean(connection)}
+            busy={busy}
+            onLoad={loadClaims}
+            onClaim={claim}
+          />
+        )}
+
+        <p className="note" style={{ textAlign: "center", marginTop: 10 }}>
+          Your dSCRT balance and transfers are private. Deposits, withdrawals, the exchange
+          rate and every window&apos;s size are public — Secret encrypts contract state, not
+          the bank or staking modules.
+        </p>
       </div>
+    </div>
+  );
+}
+
+/**
+ * The user's own withdrawals, at the foot of the unstake tab.
+ *
+ * Below the form rather than beside it: it is what you look at after requesting, and the
+ * design has no second column to put it in.
+ */
+function Withdrawals({
+  config,
+  claims,
+  connected,
+  busy,
+  onLoad,
+  onClaim,
+}: {
+  config: Config | null;
+  claims: PendingClaims | null;
+  connected: boolean;
+  busy: boolean;
+  onLoad: () => Promise<void>;
+  onClaim: () => Promise<void>;
+}) {
+  const wait = config
+    ? `${Math.round(config.params.unbonding_period_secs / 86_400)}–${Math.round(
+        (config.params.unbonding_period_secs + config.params.unbond_window_secs) / 86_400,
+      )} days`
+    : "—";
+
+  return (
+    <div className="panel" style={{ marginTop: 10 }}>
+      <div className="row" style={{ marginBottom: 14 }}>
+        <span className="h2" style={{ margin: 0 }}>
+          Your withdrawals
+        </span>
+        <span className="v numeral">{wait}</span>
+      </div>
+
+      {!connected ? (
+        <p className="note">
+          Connect a wallet to see your position. Claims are private contract state, read
+          with a permit you sign rather than with anything stored here.
+        </p>
+      ) : !claims ? (
+        <>
+          <p className="note" style={{ marginBottom: 14 }}>
+            One signature covers the whole app. It is a signature rather than a transaction,
+            so it costs nothing.
+          </p>
+          <button className="btn btn--ghost btn--md" onClick={onLoad} disabled={busy}>
+            Sign permit
+          </button>
+        </>
+      ) : claims.claims.length === 0 ? (
+        <p className="note">No withdrawal requests yet.</p>
+      ) : (
+        <>
+          <table className="plain">
+            <thead>
+              <tr>
+                <th>Window</th>
+                <th>Amount</th>
+                <th>Ready</th>
+              </tr>
+            </thead>
+            <tbody>
+              {claims.claims.map((c) => (
+                <tr key={c.window_id}>
+                  <td className="numeral">#{c.window_id}</td>
+                  <td className="numeral">{fromMicro(c.scrt_owed)}</td>
+                  <td>
+                    {c.claimed ? (
+                      <span className="pill">paid</span>
+                    ) : c.state === "matured" ? (
+                      <span className="pill pill--live">now</span>
+                    ) : (
+                      <span className="pill">
+                        {c.matures_at ? untilFrom(c.matures_at) : "queued"}
+                      </span>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+
+          <button
+            className="btn btn--md"
+            style={{ marginTop: 16 }}
+            onClick={onClaim}
+            disabled={claims.total_claimable_now === "0" || busy}
+          >
+            {claims.total_claimable_now === "0"
+              ? "Nothing to claim yet"
+              : `Claim ${fromMicro(claims.total_claimable_now)} SCRT`}
+          </button>
+          <p className="note" style={{ marginTop: 10 }}>
+            Amounts are what each window will actually pay. If a validator was slashed while
+            a window was unbonding, the shortfall is shared across everyone in it.
+          </p>
+        </>
+      )}
     </div>
   );
 }

@@ -76,7 +76,7 @@ export function ConnectButton() {
       disabled={connecting}
       title={error ?? undefined}
     >
-      {connecting ? "Connecting…" : "Connect wallet"}
+      {connecting ? "Connecting…" : "Connect"}
     </button>
   );
 }

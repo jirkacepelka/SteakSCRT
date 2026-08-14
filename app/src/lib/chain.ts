@@ -32,6 +32,23 @@ export const DEPLOYMENT: Deployment = {
   },
 };
 
+/**
+ * Whether the build actually knows which deployment it is pointing at.
+ *
+ * With the variables missing, the addresses are empty strings and every query goes to
+ * `/compute/v1beta1/query/` — which serves the app's own HTML back, so the first thing a
+ * user sees is `Unexpected token '<'`. That is a deployment mistake wearing the costume of
+ * a chain error, and it cost a round of debugging on a live Vercel build, so the app says
+ * plainly what is missing instead.
+ */
+export const CONFIGURED = Boolean(
+  DEPLOYMENT.lcdUrl &&
+    DEPLOYMENT.core.address &&
+    DEPLOYMENT.core.codeHash &&
+    DEPLOYMENT.token.address &&
+    DEPLOYMENT.token.codeHash,
+);
+
 export const DENOM = "uscrt";
 export const DECIMALS = 6;
 
