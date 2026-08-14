@@ -28,7 +28,10 @@ export const DENOM = "uscrt";
 /** LocalSecret's actual unbonding period. */
 export const UNBONDING_SECS = 90;
 
-/** Accounts LocalSecret funds in genesis. */
+/**
+ * NOT SECRETS — the public LocalSecret genesis mnemonics, valid only on a throwaway local
+ * chain. See scripts/devnet.mjs.
+ */
 export const MNEMONICS = {
   validator:
     "push certain add next grape invite tobacco bubble text romance again lava crater pill genius vital fresh guard great patch knee series era tonight",

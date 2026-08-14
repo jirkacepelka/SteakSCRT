@@ -7,7 +7,7 @@
 
 import type { SecretNetworkClient } from "secretjs";
 
-import { DEPLOYMENT, DENOM, readOnlyClient, type Connection } from "./chain";
+import { DEPLOYMENT, DENOM, readOnlyClient, toBase64, type Connection } from "./chain";
 
 export interface ProtocolState {
   total_bonded: string;
@@ -189,7 +189,7 @@ export function deposit(conn: Connection, microAmount: string) {
  * really moved before it books a claim against them.
  */
 export async function requestUnbond(conn: Connection, microShares: string) {
-  const hook = Buffer.from(JSON.stringify({ unbond: {} })).toString("base64");
+  const hook = toBase64(JSON.stringify({ unbond: {} }));
 
   const tx = await conn.client.tx.compute.executeContract(
     {

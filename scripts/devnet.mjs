@@ -44,8 +44,12 @@ const CHAIN_ID = "secretdev-1";
 const RPC = "http://localhost:26657";
 
 /**
- * Accounts pre-funded in LocalSecret's genesis, each with 1e18 uscrt.
- * `validator` runs the only real node; the rest are ordinary accounts.
+ * NOT SECRETS. These are the well-known test mnemonics published in SCRT Labs'
+ * LocalSecret image, funded only on a throwaway local chain that exists for the length of
+ * a `docker run`. They are reproduced here so the devnet is reproducible, and a secret
+ * scanner flagging them is a false positive.
+ *
+ * Anyone putting real funds behind one of these keys would be handing them to the public.
  */
 export const DEVNET_ACCOUNTS = {
   validator:

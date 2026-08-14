@@ -41,6 +41,7 @@ const NETWORKS = {
     // withdrawal path is testable in a single sitting.
     unbondingPeriodSecs: 90,
     unbondWindowSecs: 120,
+    // Public LocalSecret genesis key. Not a secret, and useless off the local chain.
     mnemonic:
       "push certain add next grape invite tobacco bubble text romance again lava crater pill genius vital fresh guard great patch knee series era tonight",
   },

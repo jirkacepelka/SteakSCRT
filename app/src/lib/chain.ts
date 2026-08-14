@@ -160,6 +160,21 @@ export function forgetPermit(address: string) {
   localStorage.removeItem(`${PERMIT_STORAGE_KEY}.${address}`);
 }
 
+/**
+ * Base64-encode a string in the browser.
+ *
+ * Deliberately not `Buffer`: it is a Node API, and Next does not polyfill it. Using it
+ * here typechecked cleanly, passed every unit test, and then threw
+ * `Buffer is not defined` for any user who tried to withdraw — the one code path that had
+ * no browser coverage.
+ */
+export function toBase64(value: string): string {
+  const bytes = new TextEncoder().encode(value);
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary);
+}
+
 // ---- formatting ----
 
 export function fromMicro(raw: string | number | bigint, dp = 4): string {
