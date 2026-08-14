@@ -14,7 +14,14 @@ Import the repository, then set:
 | Root Directory | `app` |
 | Framework | Next.js (detected) |
 | Build command | default |
-| Output directory | `out` (set in `app/vercel.json`) |
+| Output directory | **leave empty** |
+
+Leave the output directory alone even though the build really does write to `app/out`.
+Vercel understands `output: "export"` natively: it runs the Next.js builder, reads
+`.next` for the route manifest, and serves the exported files itself. Pointing it at `out`
+instead makes it look for `routes-manifest.json` in a directory that only ever holds
+static HTML, and the deploy fails with *"The file `app/out/routes-manifest.json` couldn't
+be found"* — a build that succeeded, rejected at the publish step.
 
 Then add the environment variables below for every environment you want to build. They are
 all `NEXT_PUBLIC_*` and end up in the bundle — that is intended. A contract address is not a
