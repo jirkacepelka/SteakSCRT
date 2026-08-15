@@ -98,11 +98,13 @@ export function loadConfig(argv: string[] = process.argv.slice(2)): KeeperConfig
      *
      * The gas limit is charged in full. Cosmos takes the fee you declare, not the gas you
      * burn, so declaring 1 500 000 for a 67 000-gas transaction was paying 22x over the
-     * odds on every single one. 400 000 keeps a wide margin over the largest measured
-     * call and still costs a fraction.
+     * odds on every single one. It is now sized per transaction from the validator set —
+     * see `Keeper.gasLimit` — because a flat number is either tight on a large set or
+     * wasteful on a small one. Setting GAS_LIMIT overrides that, for a chain whose costs
+     * have moved.
      */
     pageLimit: Number(process.env.PAGE_LIMIT ?? 25),
-    gasLimit: Number(process.env.GAS_LIMIT ?? 400_000),
+    gasLimit: process.env.GAS_LIMIT ? Number(process.env.GAS_LIMIT) : 0,
     // The chain's minimum is 0.0125 uscrt. Twice that absorbs a min-price change without
     // an emergency redeploy; the old 0.1 was eight times the floor for no reason.
     gasPrice: process.env.GAS_PRICE ?? "0.025uscrt",

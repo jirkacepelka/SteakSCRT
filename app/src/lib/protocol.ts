@@ -167,37 +167,47 @@ export async function fetchTokenBalance(
  *
  * A Cosmos transaction is charged the fee it declares, not the gas it burns, and secret.js
  * defaults to 0.1 uscrt per gas — eight times the chain's own minimum. Declaring a flat
- * 1 500 000 at that price billed every deposit, withdrawal and claim 0.15 SCRT, which
- * against the gas these actually use, measured on a devnet:
+ * 1 500 000 at that price billed every deposit, withdrawal and claim 0.15 SCRT. Measured
+ * against a four-validator devnet, they use:
  *
- *   deposit                    86 858
- *   unbond (Send + hook)      120 909
- *   claim                      44 646
+ *   deposit                   113 864
+ *   unbond (Send + hook)      155 108
+ *   claim                      44 640
  *
- * meant a claim was paying thirty-three times over. On a small deposit that gas dwarfed
- * the protocol's own fee: 0.15 SCRT is about what an 8% cut of a year's rewards comes to
- * on an eight-SCRT position.
+ * so a claim was paying thirty-three times over. On a small position that gas dwarfed the
+ * protocol's own economics: 0.15 SCRT is roughly an 8% cut of a year's rewards on an
+ * eight-SCRT deposit.
  *
- * The limits below keep roughly a 2.5x margin over measurement, which covers a heavier
- * validator set or a claim spanning several windows. A limit that is too low is worse
- * than one that is too high — the transaction fails and the fee is charged anyway — so
- * the margin is deliberate, and it is still an order of magnitude better than a flat
- * ceiling.
+ * Deposits and withdrawals scale with the validator set, because both re-read every
+ * delegation before pricing — about 7 500 gas each. A flat limit therefore has to choose
+ * between being wrong on a large set and overcharging on a small one, so it is computed
+ * from the set instead. `scripts/gas-probe.mjs` measures these against a live devnet and
+ * fails if the margin drops below 1.8x; re-run it whenever the pricing path changes.
  *
- * Wallets may substitute their own fee when they sign. That is not something this app can
- * force either way, but the declared limit is what such a wallet prices, so getting it
- * right helps in both cases.
+ * Too low is worse than too high — the transaction fails and the fee is charged anyway —
+ * hence the 2.5x margin. Wallets may substitute their own fee when they sign, which this
+ * app cannot force either way, but the declared limit is what such a wallet prices.
  */
 const GAS_PRICE = 0.025;
 
+/** Ceiling the contract compiles in, and the fallback when the set is not loaded yet. */
+const MAX_VALIDATORS = 20;
+
+/** Fixed cost of the action, before any delegation is read. */
+const GAS_BASE = { deposit: 85_000, unbond: 125_000 } as const;
+const GAS_PER_VALIDATOR = 7_500;
+const GAS_MARGIN = 2.5;
+
+function scaled(action: keyof typeof GAS_BASE, validators?: number): number {
+  const n = validators && validators > 0 ? validators : MAX_VALIDATORS;
+  return Math.ceil((GAS_BASE[action] + GAS_PER_VALIDATOR * n) * GAS_MARGIN);
+}
+
 export const GAS = {
-  // Both of these now re-read the whole validator set before pricing, at roughly 7 000
-  // gas each, so the limits carry the largest allowlist the contract will accept.
-  deposit: 400_000,
-  unbond: 450_000,
+  /** Neither of these reads the validator set, so both are flat. */
   claim: 300_000,
-  /** Manager actions scale with the validator set, so they keep more room. */
-  manage: 500_000,
+  /** Manager actions scale with the set but are rare and not user-facing. */
+  manage: 700_000,
 } as const;
 
 async function execCore(
@@ -220,8 +230,10 @@ async function execCore(
   return tx;
 }
 
-export function deposit(conn: Connection, microAmount: string) {
-  return execCore(conn, { deposit: {} }, GAS.deposit, [{ denom: DENOM, amount: microAmount }]);
+export function deposit(conn: Connection, microAmount: string, validators?: number) {
+  return execCore(conn, { deposit: {} }, scaled("deposit", validators), [
+    { denom: DENOM, amount: microAmount },
+  ]);
 }
 
 /**
@@ -231,7 +243,11 @@ export function deposit(conn: Connection, microAmount: string) {
  * `lst-core` with an `Unbond` hook, which is the only way the core can be sure the tokens
  * really moved before it books a claim against them.
  */
-export async function requestUnbond(conn: Connection, microShares: string) {
+export async function requestUnbond(
+  conn: Connection,
+  microShares: string,
+  validators?: number,
+) {
   const hook = toBase64(JSON.stringify({ unbond: {} }));
 
   const tx = await conn.client.tx.compute.executeContract(
@@ -248,7 +264,7 @@ export async function requestUnbond(conn: Connection, microShares: string) {
         },
       },
     },
-    { gasLimit: GAS.unbond, gasPriceInFeeDenom: GAS_PRICE },
+    { gasLimit: scaled("unbond", validators), gasPriceInFeeDenom: GAS_PRICE },
   );
   if (tx.code !== 0) throw new Error(tx.rawLog);
   return tx;

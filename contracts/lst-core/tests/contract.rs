@@ -122,6 +122,25 @@ fn set_token_supply(deps: &mut Deps, supply: u128) {
 }
 
 fn set_delegation(deps: &mut Deps, env: &Env, validator: &str, bonded: u128, rewards: u128) {
+    set_delegations(deps, env, &[(validator, bonded, rewards)]);
+}
+
+/// State what the staking module reports, replacing whatever it said before.
+///
+/// Anything not listed reads as no delegation at all, which is how a test says the chain
+/// disagrees with the contract's cache.
+fn set_delegations(deps: &mut Deps, env: &Env, entries: &[(&str, u128, u128)]) {
+    let delegations: Vec<FullDelegation> = entries
+        .iter()
+        .map(|(validator, bonded, rewards)| FullDelegation {
+            delegator: env.contract.address.clone(),
+            validator: validator.to_string(),
+            amount: Coin::new(*bonded, DENOM),
+            can_redelegate: Coin::new(0, DENOM),
+            accumulated_rewards: vec![Coin::new(*rewards, DENOM)],
+        })
+        .collect();
+
     deps.querier.update_staking(
         DENOM,
         &[
@@ -130,13 +149,7 @@ fn set_delegation(deps: &mut Deps, env: &Env, validator: &str, bonded: u128, rew
             mock_validator(V3),
             mock_validator(V4),
         ],
-        &[FullDelegation {
-            delegator: env.contract.address.clone(),
-            validator: validator.to_string(),
-            amount: Coin::new(bonded, DENOM),
-            can_redelegate: Coin::new(0, DENOM),
-            accumulated_rewards: vec![Coin::new(rewards, DENOM)],
-        }],
+        &delegations,
     );
 }
 
@@ -590,6 +603,66 @@ fn a_deposit_in_the_wrong_denom_is_rejected() {
         matches!(err, ContractError::WrongDenom { .. }),
         "got {err:?}"
     );
+}
+
+#[test]
+fn a_deposit_prices_against_the_chain_not_against_its_own_cache() {
+    // The fixtures mirror what the contract believes into the mocked staking module, so
+    // on their own they cannot prove the refresh reads anything at all. This makes the
+    // two disagree: the chain says the delegation is worth less than the contract thinks,
+    // which is what a slashing looks like, and the depositor must be priced on the
+    // chain's number.
+    let (mut deps, env) = with_user_deposit();
+
+    // 20 SCRT backing 20 shares. Halve what the chain reports.
+    set_delegations(&mut deps, &env, &[(V1, 10_000_000, 0)]);
+    deps.querier.update_balance(
+        env.contract.address.clone(),
+        vec![Coin::new(10_000_000, DENOM)],
+    );
+
+    let res = execute(
+        deps.as_mut(),
+        env.clone(),
+        mock_info(USER, &[Coin::new(10_000_000, DENOM)]),
+        ExecuteMsg::Deposit {},
+    )
+    .unwrap();
+
+    match from_binary(&res.data.unwrap()).unwrap() {
+        ExecuteAnswer::Deposit { shares_minted, .. } => {
+            // Pool is 10 SCRT against 20 shares, so a share is worth half a SCRT and
+            // 10 SCRT buys 20 of them. Pricing off the stale cache would have minted 10.
+            assert_eq!(
+                shares_minted,
+                Uint128::new(20_000_000),
+                "the deposit was priced against the cache, not the chain"
+            );
+        }
+        other => panic!("unexpected answer {other:?}"),
+    }
+}
+
+#[test]
+fn a_withdrawal_prices_against_the_chain_not_against_its_own_cache() {
+    // The same divergence on the way out: a holder leaving a slashed pool must take the
+    // loss, or the ones who stayed pay for their exit.
+    let (mut deps, env) = with_user_deposit();
+
+    set_delegations(&mut deps, &env, &[(V1, 10_000_000, 0)]);
+
+    let res = unbond(&mut deps, &env, USER, 5_000_000).unwrap();
+
+    match from_binary(&res.data.unwrap()).unwrap() {
+        ExecuteAnswer::Unbond { scrt_owed, .. } => {
+            assert_eq!(
+                scrt_owed,
+                Uint128::new(2_500_000),
+                "5 shares of a halved pool are worth 2.5 SCRT, not 5"
+            );
+        }
+        other => panic!("unexpected answer {other:?}"),
+    }
 }
 
 #[test]

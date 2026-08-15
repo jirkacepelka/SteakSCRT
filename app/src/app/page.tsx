@@ -122,11 +122,14 @@ export default function StakingPage() {
       const micro = toMicro(amount);
       setFeedback({ kind: "busy", message: "Waiting for your wallet…" });
 
+      // The gas limit scales with the validator set, because pricing re-reads all of it.
+      const validators = config?.validator_allowlist.length;
+
       if (mode === "stake") {
-        await deposit(connection, micro);
+        await deposit(connection, micro, validators);
         setFeedback({ kind: "ok", message: `Staked ${amount} SCRT.` });
       } else {
-        await requestUnbond(connection, micro);
+        await requestUnbond(connection, micro, validators);
         setFeedback({
           kind: "ok",
           message: maturity

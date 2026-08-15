@@ -39,6 +39,12 @@ export interface UnbondWindow {
   state: "open" | "unbonding" | "matured" | "settled";
 }
 
+/** The ceiling the contract compiles in, and what to assume before the set is known. */
+const MAX_VALIDATORS = 20;
+const COMPOUND_BASE_GAS = 95_000;
+const PER_VALIDATOR_GAS = 9_300;
+const GAS_MARGIN = 2.5;
+
 export class Keeper {
   private readonly client: SecretNetworkClient;
   private readonly config: KeeperConfig;
@@ -75,6 +81,10 @@ export class Keeper {
     const answer = await this.query<{ validators: { validators: ValidatorEntry[] } }>({
       validators: {},
     });
+    // Remembered so the gas limit can be sized from the real set rather than from the
+    // contract's ceiling. The invariant sweep reads this at the top of every cycle, so it
+    // is current well before any transaction goes out.
+    this.validatorCount = answer.validators.validators.length;
     return answer.validators.validators;
   }
 
@@ -105,7 +115,10 @@ export class Keeper {
           msg,
           sent_funds: [],
         },
-        { gasLimit: this.config.gasLimit, gasPriceInFeeDenom: Number(this.config.gasPrice.replace(/[^\d.]/g, "")) },
+        {
+          gasLimit: this.gasLimit(),
+          gasPriceInFeeDenom: Number(this.config.gasPrice.replace(/[^\d.]/g, "")),
+        },
       );
 
       if (tx.code !== 0) {
@@ -116,6 +129,30 @@ export class Keeper {
       return { ok: false, error: e instanceof Error ? e.message : String(e) };
     }
   }
+
+  /**
+   * Gas for one upkeep transaction, sized from the validator set.
+   *
+   * Every task the keeper runs costs a fixed amount plus a per-validator amount, so a flat
+   * limit is either too small on a large set or overcharges on a small one — and the fee
+   * is the limit, not the gas burned, so overcharging is real money. Measured on a devnet:
+   *
+   *   sync       45 001 at one validator, 66 241 at four   -> ~7 000 each
+   *   compound  104 655 at one validator, 132 586 at four  -> ~9 300 each
+   *
+   * Compound is the expensive shape, so its numbers size every task. A flat 400 000 held
+   * at four validators and would have gone tight at the contract's ceiling of twenty.
+   *
+   * `GAS_LIMIT` still overrides, for a chain whose costs have moved.
+   */
+  private gasLimit(): number {
+    if (this.config.gasLimit) return this.config.gasLimit;
+    const n = this.validatorCount ?? MAX_VALIDATORS;
+    return Math.ceil((COMPOUND_BASE_GAS + PER_VALIDATOR_GAS * n) * GAS_MARGIN);
+  }
+
+  /** Set once the keeper has seen the set, so the first transaction assumes the worst. */
+  validatorCount: number | null = null;
 
   /** Balance of the keeper's own account, so it can warn before it runs out of gas. */
   async gasBalance(): Promise<bigint> {

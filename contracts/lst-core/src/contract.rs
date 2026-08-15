@@ -624,7 +624,15 @@ fn read_delegation(
     entry: &mut ValidatorEntry,
     denom: &str,
 ) -> Result<(), ContractError> {
-    match deps.querier.query_delegation(contract, &entry.address)? {
+    let delegation = deps
+        .querier
+        .query_delegation(contract, &entry.address)
+        .map_err(|err| ContractError::ValidatorUnreadable {
+            address: entry.address.clone(),
+            reason: err.to_string(),
+        })?;
+
+    match delegation {
         Some(d) => {
             entry.bonded = d.amount.amount;
             entry.pending_rewards = d
@@ -676,8 +684,10 @@ fn refresh_totals(deps: DepsMut, env: &Env, config: &Config) -> Result<TotalsCac
         .fold(Uint128::zero(), |acc, v| acc + v.pending_rewards);
 
     VALIDATORS.save(deps.storage, &set)?;
-    // A complete sweep supersedes any partial one the keeper left behind.
-    SYNC_CURSOR.save(deps.storage, &0)?;
+    // Deliberately not touching SYNC_CURSOR. `Compound` shares it, so resetting it here
+    // made a deposit rewind a compound sweep in progress to its first validator — burning
+    // gas re-harvesting what was already harvested. A keeper resuming a now-redundant
+    // paginated sync just re-reads fresh data, which costs one page and nothing else.
 
     let mut totals = TOTALS.load(deps.storage)?;
     totals.total_bonded = total_bonded;

@@ -37,6 +37,16 @@ pub enum ContractError {
     #[error("validator set must not be empty")]
     EmptyValidatorSet,
 
+    /// The staking module would not answer for a validator during a pricing refresh.
+    ///
+    /// Deliberately fatal rather than falling back to the cached figure. If that validator
+    /// had just been slashed, the cached number is exactly the one an arbitrageur wants
+    /// the pool priced against — refusing costs liveness for as long as the fault lasts,
+    /// where guessing costs the holders who stayed. Claims on matured windows do not
+    /// refresh and so keep paying out regardless.
+    #[error("could not read the delegation to {address}: {reason}")]
+    ValidatorUnreadable { address: String, reason: String },
+
     /// Every deposit and withdrawal re-reads the whole set, so its size is a gas cost
     /// users pay. Bounded in code rather than left to configuration.
     #[error("validator set of {got} exceeds the maximum of {max}")]
