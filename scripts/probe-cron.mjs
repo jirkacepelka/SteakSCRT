@@ -178,13 +178,22 @@ async function main() {
     process.stdout.write(".");
   }
 
+  // Distinguish "never fired" from "fired and did nothing" — different diagnoses.
+  const schedule = JSON.parse(
+    secretd(["query", "cron", "list-schedule", "--output", "json"]),
+  ).schedules?.find((x) => x.name === "lst-upkeep");
+
   console.log(
-    `\n\nRESULT: the schedule was accepted but never moved the contract in ` +
-      `${height() - startHeight} blocks.`,
+    `\n\nRESULT: no movement in ${height() - startHeight} blocks, but cron records ` +
+      `last_execute_height ${schedule?.last_execute_height ?? "?"}.`,
   );
-  console.log("Accepting a schedule and executing it are evidently not the same thing —");
-  console.log("most likely the same signature binding that stops governance calling a");
-  console.log("contract. Treat cron as unavailable for compute messages.");
+  console.log("\nThe module is firing the schedule and the contract is not running: the");
+  console.log("block at that height carries no wasm or compute event at all. A schedule");
+  console.log("stores its message as a plain string, with nowhere to put the nonce and");
+  console.log("public key Secret's encryption needs — the same wall that stops governance");
+  console.log("calling a contract. The call is dropped rather than refused, and nothing");
+  console.log("surfaces to say so.");
+  console.log("\nTreat x/cron as unavailable for driving this protocol's upkeep.");
 }
 
 main().catch((err) => {
