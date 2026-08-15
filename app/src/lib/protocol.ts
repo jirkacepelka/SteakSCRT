@@ -162,7 +162,48 @@ export async function fetchTokenBalance(
 
 // ---- writes ----
 
-async function execCore(conn: Connection, msg: object, funds: { denom: string; amount: string }[] = []) {
+/*
+ * What a user pays.
+ *
+ * A Cosmos transaction is charged the fee it declares, not the gas it burns, and secret.js
+ * defaults to 0.1 uscrt per gas — eight times the chain's own minimum. Declaring a flat
+ * 1 500 000 at that price billed every deposit, withdrawal and claim 0.15 SCRT, which
+ * against the gas these actually use, measured on a devnet:
+ *
+ *   deposit                    86 858
+ *   unbond (Send + hook)      120 909
+ *   claim                      44 646
+ *
+ * meant a claim was paying thirty-three times over. On a small deposit that gas dwarfed
+ * the protocol's own fee: 0.15 SCRT is about what an 8% cut of a year's rewards comes to
+ * on an eight-SCRT position.
+ *
+ * The limits below keep roughly a 2.5x margin over measurement, which covers a heavier
+ * validator set or a claim spanning several windows. A limit that is too low is worse
+ * than one that is too high — the transaction fails and the fee is charged anyway — so
+ * the margin is deliberate, and it is still an order of magnitude better than a flat
+ * ceiling.
+ *
+ * Wallets may substitute their own fee when they sign. That is not something this app can
+ * force either way, but the declared limit is what such a wallet prices, so getting it
+ * right helps in both cases.
+ */
+const GAS_PRICE = 0.025;
+
+export const GAS = {
+  deposit: 250_000,
+  unbond: 300_000,
+  claim: 300_000,
+  /** Manager actions scale with the validator set, so they keep more room. */
+  manage: 500_000,
+} as const;
+
+async function execCore(
+  conn: Connection,
+  msg: object,
+  gasLimit: number,
+  funds: { denom: string; amount: string }[] = [],
+) {
   const tx = await conn.client.tx.compute.executeContract(
     {
       sender: conn.address,
@@ -171,14 +212,14 @@ async function execCore(conn: Connection, msg: object, funds: { denom: string; a
       msg,
       sent_funds: funds,
     },
-    { gasLimit: 1_500_000 },
+    { gasLimit, gasPriceInFeeDenom: GAS_PRICE },
   );
   if (tx.code !== 0) throw new Error(tx.rawLog);
   return tx;
 }
 
 export function deposit(conn: Connection, microAmount: string) {
-  return execCore(conn, { deposit: {} }, [{ denom: DENOM, amount: microAmount }]);
+  return execCore(conn, { deposit: {} }, GAS.deposit, [{ denom: DENOM, amount: microAmount }]);
 }
 
 /**
@@ -205,33 +246,33 @@ export async function requestUnbond(conn: Connection, microShares: string) {
         },
       },
     },
-    { gasLimit: 1_500_000 },
+    { gasLimit: GAS.unbond, gasPriceInFeeDenom: GAS_PRICE },
   );
   if (tx.code !== 0) throw new Error(tx.rawLog);
   return tx;
 }
 
 export function claimMatured(conn: Connection, windowIds?: number[]) {
-  return execCore(conn, { claim_matured: { window_ids: windowIds ?? null } });
+  return execCore(conn, { claim_matured: { window_ids: windowIds ?? null } }, GAS.claim);
 }
 
 // ---- manager actions ----
 
 export function setPerformanceFee(conn: Connection, bps: number) {
-  return execCore(conn, { manager: { set_performance_fee: { bps } } });
+  return execCore(conn, { manager: { set_performance_fee: { bps } } }, GAS.manage);
 }
 
 export function setWeights(conn: Connection, weights: { address: string; weight_bps: number }[]) {
-  return execCore(conn, { manager: { set_weights: { weights } } });
+  return execCore(conn, { manager: { set_weights: { weights } } }, GAS.manage);
 }
 
 export function rebalance(
   conn: Connection,
   plan: { src_validator: string; dst_validator: string; amount: string }[],
 ) {
-  return execCore(conn, { manager: { rebalance: { plan } } });
+  return execCore(conn, { manager: { rebalance: { plan } } }, GAS.manage);
 }
 
 export function setPaused(conn: Connection, paused: boolean) {
-  return execCore(conn, { set_paused: { paused } });
+  return execCore(conn, { set_paused: { paused } }, GAS.manage);
 }
