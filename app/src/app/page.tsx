@@ -157,7 +157,6 @@ export default function StakingPage() {
   if (!CONFIGURED) return <Unconfigured />;
 
   const busy = feedback.kind === "busy";
-  const stale = state?.is_stale ?? false;
   const symbol = mode === "stake" ? "SCRT" : "dSCRT";
 
   return (
@@ -243,23 +242,14 @@ export default function StakingPage() {
           </div>
         )}
 
-        <button
-          className="btn"
-          onClick={submit}
-          disabled={!connection || busy || stale || !amount}
-          // The contract refuses to price against totals it no longer trusts, so the
-          // button says why it is dead rather than leaving the user to guess.
-          title={stale ? "Cached totals are stale; the contract is refusing to price." : undefined}
-        >
+        <button className="btn" onClick={submit} disabled={!connection || busy || !amount}>
           {!connection
             ? "Connect wallet"
-            : stale
-              ? "Waiting for sync"
-              : busy
-                ? "Confirm in wallet…"
-                : mode === "stake"
-                  ? "Stake"
-                  : "Request withdrawal"}
+            : busy
+              ? "Confirm in wallet…"
+              : mode === "stake"
+                ? "Stake"
+                : "Request withdrawal"}
         </button>
 
         {feedback.kind !== "idle" && <Status feedback={feedback} />}

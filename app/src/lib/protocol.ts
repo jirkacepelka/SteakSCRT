@@ -191,8 +191,10 @@ export async function fetchTokenBalance(
 const GAS_PRICE = 0.025;
 
 export const GAS = {
-  deposit: 250_000,
-  unbond: 300_000,
+  // Both of these now re-read the whole validator set before pricing, at roughly 7 000
+  // gas each, so the limits carry the largest allowlist the contract will accept.
+  deposit: 400_000,
+  unbond: 450_000,
   claim: 300_000,
   /** Manager actions scale with the validator set, so they keep more room. */
   manage: 500_000,

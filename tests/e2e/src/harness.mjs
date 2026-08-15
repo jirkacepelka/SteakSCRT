@@ -99,6 +99,9 @@ export async function deployProtocol({
   minDeposit = "1000000",
   performanceFeeBps = 800,
   manager,
+  // Only the staleness scenario touches this. It no longer gates anything, but it still
+  // decides when the protocol reports itself unattended.
+  syncStaleAfterSecs = 7_200,
 } = {}) {
   const deployer = account(MNEMONICS.validator);
   const code = await uploadOnce(deployer);
@@ -151,7 +154,7 @@ export async function deployProtocol({
           performance_fee_bps: performanceFeeBps,
           withdrawal_fee_bps: 0,
           min_deposit: minDeposit,
-          sync_stale_after_secs: 7_200,
+          sync_stale_after_secs: syncStaleAfterSecs,
           max_unbond_entries_per_validator: 6,
         },
       },

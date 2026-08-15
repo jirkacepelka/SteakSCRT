@@ -180,8 +180,10 @@ The call consumes the right.
 
 - `overflow-checks` stays on in release builds. Every arithmetic path touches user funds.
 - Share conversions round in favour of the pool, never the caller.
-- Deposits and withdrawals are refused when cached totals are stale, so an unsynced
-  slashing event cannot be arbitraged.
+- Deposits and withdrawals re-read every delegation in their own transaction before
+  pricing, so an unsynced slashing event cannot be arbitraged and the protocol does not go
+  offline when the keeper does. The validator set is capped in code, because the size of
+  that read lands on a user's gas bill.
 - Claiming matured funds is never pausable — a compromised or absent admin cannot trap
   withdrawals.
 - Contract migration is gated behind a governance vote, not an admin key.

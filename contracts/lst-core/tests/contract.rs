@@ -140,6 +140,47 @@ fn set_delegation(deps: &mut Deps, env: &Env, validator: &str, bonded: u128, rew
     );
 }
 
+/// Make the mocked staking module agree with what the contract believes it delegated.
+///
+/// Deposits and withdrawals re-read their delegations before pricing, so a test that
+/// deposits and then withdraws has to model the delegation actually landing — the old
+/// fixtures let the cached total grow arithmetically and never checked it against a
+/// staking module at all, which is exactly the fiction the contract no longer accepts.
+///
+/// Tests that want the chain to *disagree* — a slashing — call `set_delegations`
+/// afterwards to say so explicitly.
+fn chain_confirms_delegations(deps: &mut Deps, env: &Env) {
+    let answer: QueryAnswer =
+        from_binary(&query(deps.as_ref(), env.clone(), QueryMsg::Validators {}).unwrap()).unwrap();
+    let entries = match answer {
+        QueryAnswer::Validators { validators } => validators,
+        other => panic!("unexpected answer {other:?}"),
+    };
+
+    let delegations: Vec<FullDelegation> = entries
+        .iter()
+        .filter(|v| !v.bonded.is_zero())
+        .map(|v| FullDelegation {
+            delegator: env.contract.address.clone(),
+            validator: v.address.clone(),
+            amount: Coin::new(v.bonded.u128(), DENOM),
+            can_redelegate: Coin::new(0, DENOM),
+            accumulated_rewards: vec![Coin::new(v.pending_rewards.u128(), DENOM)],
+        })
+        .collect();
+
+    deps.querier.update_staking(
+        DENOM,
+        &[
+            mock_validator(V1),
+            mock_validator(V2),
+            mock_validator(V3),
+            mock_validator(V4),
+        ],
+        &delegations,
+    );
+}
+
 /// Instantiate and bootstrap, leaving a pool of exactly `SEED` backed by `SEED` shares.
 fn bootstrapped() -> (Deps, Env) {
     let mut deps = mock_dependencies();
@@ -171,11 +212,41 @@ fn bootstrapped() -> (Deps, Env) {
     deps.querier
         .update_balance(env.contract.address.clone(), vec![]);
     set_token_supply(&mut deps, SEED);
+    chain_confirms_delegations(&mut deps, &env);
 
     (deps, env)
 }
 
 // ---- instantiation ----
+
+#[test]
+fn an_oversized_allowlist_is_rejected_because_users_would_pay_for_it() {
+    // Deposits and withdrawals re-read every validator, so the set's size is gas on a
+    // user's transaction. Bounding it in code keeps that from being a configuration
+    // mistake nobody notices until a deposit costs a fortune.
+    let mut deps = mock_dependencies();
+    let mut msg = init_msg(params(), validator_set());
+    msg.validator_allowlist = (0..=lst_core::math::MAX_VALIDATORS)
+        .map(|i| format!("secretvaloper1padding{i:04}"))
+        .collect();
+
+    let err = instantiate(
+        deps.as_mut(),
+        mock_env(),
+        mock_info(DEPLOYER, &[]),
+        msg,
+    )
+    .unwrap_err();
+
+    assert!(
+        matches!(
+            err,
+            ContractError::TooManyValidators { got, max }
+                if got == lst_core::math::MAX_VALIDATORS + 1 && max == lst_core::math::MAX_VALIDATORS
+        ),
+        "got {err:?}"
+    );
+}
 
 #[test]
 fn a_three_day_window_is_rejected_because_it_needs_more_entries_than_the_chain_allows() {
@@ -522,9 +593,10 @@ fn a_deposit_in_the_wrong_denom_is_rejected() {
 }
 
 #[test]
-fn deposits_stop_when_the_cache_goes_stale() {
-    // This is the anti-arbitrage guard: an unsynced slashing event would otherwise let
-    // someone mint against a rate that no longer reflects the pool.
+fn a_deposit_still_works_after_nobody_has_synced_for_hours() {
+    // The protocol used to refuse here, which meant an idle keeper took it offline for
+    // users. A deposit now re-reads the delegations itself, so age of the cache is
+    // irrelevant to whether someone can transact.
     let (mut deps, mut env) = bootstrapped();
     env.block.time = env.block.time.plus_seconds(7_201);
 
@@ -533,18 +605,27 @@ fn deposits_stop_when_the_cache_goes_stale() {
         vec![Coin::new(5_000_000, DENOM)],
     );
 
-    let err = execute(
+    execute(
         deps.as_mut(),
-        env,
+        env.clone(),
         mock_info(USER, &[Coin::new(5_000_000, DENOM)]),
         ExecuteMsg::Deposit {},
     )
-    .unwrap_err();
+    .expect("a stale cache must not block a deposit");
 
-    assert!(
-        matches!(err, ContractError::StaleTotals { .. }),
-        "got {err:?}"
-    );
+    // And the deposit left the cache fresh, so it also repaired what the keeper missed.
+    let answer: QueryAnswer =
+        from_binary(&query(deps.as_ref(), env.clone(), QueryMsg::State {}).unwrap()).unwrap();
+    match answer {
+        QueryAnswer::State(state) => {
+            assert!(
+                !state.is_stale,
+                "the deposit's own refresh should have restored freshness"
+            );
+            assert_eq!(state.last_sync_time, env.block.time.seconds());
+        }
+        other => panic!("unexpected answer {other:?}"),
+    }
 }
 
 #[test]
@@ -733,7 +814,7 @@ const UNBONDING: u64 = 21 * DAY;
 
 /// Drive a withdrawal request as the token contract would.
 fn unbond(deps: &mut Deps, env: &Env, who: &str, shares: u128) -> Result<Response, ContractError> {
-    execute(
+    let res = execute(
         deps.as_mut(),
         env.clone(),
         mock_info(TOKEN, &[]),
@@ -743,7 +824,27 @@ fn unbond(deps: &mut Deps, env: &Env, who: &str, shares: u128) -> Result<Respons
             amount: Uint128::new(shares),
             msg: Some(to_binary(&ReceiveHookMsg::Unbond {}).unwrap()),
         },
-    )
+    );
+
+    if res.is_ok() {
+        token_confirms_burn(deps, env);
+    }
+    res
+}
+
+/// Let the mocked token reflect the burn the withdrawal just emitted.
+///
+/// On chain the burn message settles before the next transaction runs, so a second
+/// withdrawal sees a smaller supply. A static mock kept reporting the pre-burn figure,
+/// which — now that withdrawals re-read supply instead of trusting their own cache —
+/// priced the second withdrawal against shares that no longer existed.
+fn token_confirms_burn(deps: &mut Deps, env: &Env) {
+    let answer: QueryAnswer =
+        from_binary(&query(deps.as_ref(), env.clone(), QueryMsg::State {}).unwrap()).unwrap();
+    match answer {
+        QueryAnswer::State(state) => set_token_supply(deps, state.total_supply.u128()),
+        other => panic!("unexpected answer {other:?}"),
+    }
 }
 
 /// A bootstrapped pool with a 10 SCRT user deposit on top: 20 SCRT backing 20 shares,
@@ -766,6 +867,7 @@ fn with_user_deposit() -> (Deps, Env) {
     deps.querier
         .update_balance(env.contract.address.clone(), vec![]);
     set_token_supply(&mut deps, SEED + amount);
+    chain_confirms_delegations(&mut deps, &env);
     (deps, env)
 }
 

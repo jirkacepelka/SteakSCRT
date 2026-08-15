@@ -67,9 +67,10 @@ export function loadConfig(argv: string[] = process.argv.slice(2)): KeeperConfig
     contract: required("LST_CORE_ADDRESS"),
     contractCodeHash: required("LST_CORE_CODE_HASH"),
 
-    // Freshness gates deposits and withdrawals, so this is the interval that decides
-    // whether users can transact at all. It must stay comfortably under the contract's
-    // `sync_stale_after_secs`.
+    // No longer what stands between a user and transacting — deposits and withdrawals
+    // refresh the cache themselves — but it still keeps the published rate and the
+    // validator figures current on a protocol nobody happens to be using, and it is what
+    // `sync_stale_after_secs` measures the keeper against.
     syncIntervalMs: duration("SYNC_INTERVAL", 30 * 60_000),
     // Rewards accrue every block; compounding more often than a few hours costs more gas
     // than it earns.

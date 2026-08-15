@@ -143,25 +143,14 @@ impl TotalsCache {
         self.scrt_owed_open + self.scrt_owed_unbonding + self.scrt_owed_matured
     }
 
-    /// Whether the cache is too old to price against.
+    /// Whether the cache has gone unrefreshed for longer than the protocol expects.
+    ///
+    /// No longer a gate on anything: deposits and withdrawals refresh the cache in their
+    /// own transaction, so nothing prices against this. It survives as a health signal —
+    /// a stale cache means nobody has compounded lately, which costs yield rather than
+    /// correctness, and both the keeper and the app surface it as such.
     pub fn is_stale(&self, now: u64, max_age: u64) -> bool {
         now.saturating_sub(self.last_sync_time) > max_age
-    }
-
-    /// Fail unless the cache is fresh.
-    ///
-    /// Deposits and withdrawal requests both go through this. Refusing is strictly better
-    /// than pricing against a cache that predates a slashing event, which is exactly the
-    /// window an arbitrageur would aim for.
-    pub fn assert_fresh(&self, now: u64, max_age: u64) -> Result<(), ContractError> {
-        if self.is_stale(now, max_age) {
-            return Err(ContractError::StaleTotals {
-                last_sync: self.last_sync_time,
-                now,
-                max_age,
-            });
-        }
-        Ok(())
     }
 }
 
@@ -217,17 +206,4 @@ mod tests {
         assert!(!c.is_stale(4_000, 7_200));
     }
 
-    #[test]
-    fn assert_fresh_reports_the_numbers_needed_to_diagnose_it() {
-        let c = cache(100);
-        let err = c.assert_fresh(10_000, 7_200).unwrap_err();
-        assert_eq!(
-            err,
-            ContractError::StaleTotals {
-                last_sync: 100,
-                now: 10_000,
-                max_age: 7_200,
-            }
-        );
-    }
 }

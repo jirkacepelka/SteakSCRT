@@ -30,6 +30,9 @@ import {
 } from "./harness.mjs";
 
 const SCRT = 1_000_000n;
+
+/** What the withdrawal scenario's request was actually priced at, shared by its payout. */
+let owed = 0n;
 const WINDOW_SECS = 60;
 const PARITY = "1000000000000000000";
 
@@ -75,6 +78,35 @@ describe("liquid staking, end to end", { concurrency: 1 }, () => {
     );
   });
 
+  it("still takes a deposit when nobody has synced for longer than the protocol expects", async () => {
+    // The regression this guards: the protocol used to refuse every deposit and
+    // withdrawal once the cache aged past `sync_stale_after_secs`, so an idle keeper took
+    // it offline for users. A deposit now re-reads its own delegations.
+    const idle = await deployProtocol({ windowSecs: WINDOW_SECS, syncStaleAfterSecs: 5 });
+    const depositor = account(MNEMONICS.a);
+
+    await sleep(12_000);
+    const before = await api(idle).state();
+    assert.equal(before.is_stale, true, "the cache should be reported unattended by now");
+
+    await callCore(idle, depositor, { deposit: {} }, [
+      { denom: "uscrt", amount: (5n * SCRT).toString() },
+    ]);
+
+    const after = await api(idle).state();
+    // Asserting the timestamp moved rather than that the cache reads fresh: with a
+    // five-second threshold it is stale again by the time this query lands, which says
+    // nothing about whether the deposit refreshed it.
+    assert.ok(
+      after.last_sync_time > before.last_sync_time,
+      `the deposit should have refreshed the cache (${before.last_sync_time} -> ${after.last_sync_time})`,
+    );
+    assert.ok(
+      BigInt(after.total_bonded) - BigInt(before.total_bonded) >= 5n * SCRT,
+      "the deposit should have landed",
+    );
+  });
+
   it("mints against the live rate, never more than the deposit is worth", async () => {
     const before = await query.state();
     await callCore(protocol, user, { deposit: {} }, [
@@ -99,7 +131,14 @@ describe("liquid staking, end to end", { concurrency: 1 }, () => {
     const mine = await query.pendingClaims(permit);
 
     assert.equal(mine.claims.length, 1);
-    assert.equal(mine.claims[0].scrt_owed, (4n * SCRT).toString());
+    // Not exactly 4 SCRT: a withdrawal is priced against delegations read in its own
+    // transaction, so it carries the holder's share of rewards accrued right up to that
+    // block. Worth a little over the round number, never less.
+    owed = BigInt(mine.claims[0].scrt_owed);
+    assert.ok(
+      owed >= 4n * SCRT && owed < 4n * SCRT + SCRT / 100n,
+      `expected a shade over 4 SCRT, got ${owed}`,
+    );
     assert.equal(mine.claims[0].state, "open");
     assert.equal(mine.total_claimable_now, "0", "nothing until the window matures");
 
@@ -165,8 +204,8 @@ describe("liquid staking, end to end", { concurrency: 1 }, () => {
     const claimable = await query.pendingClaims(permit);
     assert.equal(
       claimable.total_claimable_now,
-      (4n * SCRT).toString(),
-      "the matured window is claimable in full",
+      owed.toString(),
+      "the matured window is claimable in full, for exactly what it was priced at",
     );
 
     await callCore(protocol, user, { claim_matured: { window_ids: null } });
@@ -317,7 +356,11 @@ describe("the manager's boundaries hold on chain", { concurrency: 1 }, () => {
     // The point of the design: a pause stops money coming in, never going out.
     await requestUnbond(protocol, user, (1n * SCRT).toString());
     const windows = await query.windows("open");
-    assert.equal(windows[0].scrt_owed, (1n * SCRT).toString());
+    const queued = BigInt(windows[0].scrt_owed);
+    assert.ok(
+      queued >= 1n * SCRT && queued < 1n * SCRT + SCRT / 100n,
+      `expected a shade over 1 SCRT queued, got ${queued}`,
+    );
 
     await callCore(protocol, manager, { set_paused: { paused: false } });
   });

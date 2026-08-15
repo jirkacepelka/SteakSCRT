@@ -64,6 +64,16 @@ pub fn instantiate(
     validate_params(&msg.params)?;
     validators::validate_set(&msg.validators)?;
 
+    // Bounded here because every deposit and withdrawal now re-reads the whole set: an
+    // oversized allowlist would show up as gas on a user's transaction, not as a keeper's
+    // problem.
+    if msg.validator_allowlist.len() > math::MAX_VALIDATORS {
+        return Err(ContractError::TooManyValidators {
+            got: msg.validator_allowlist.len(),
+            max: math::MAX_VALIDATORS,
+        });
+    }
+
     validate_limits(&msg.limits)?;
     validators::validate_managed_weights(
         &msg.validators,
@@ -155,7 +165,7 @@ pub fn execute(
 /// protocol in trouble; using it to trap money inside would be the opposite of a safety
 /// control.
 fn execute_receive(
-    deps: DepsMut,
+    mut deps: DepsMut,
     env: Env,
     info: MessageInfo,
     from: String,
@@ -184,9 +194,9 @@ fn execute_receive(
         return Err(ContractError::ZeroAmount);
     }
 
-    let now = env.block.time.seconds();
-    let mut totals = TOTALS.load(deps.storage)?;
-    totals.assert_fresh(now, config.params.sync_stale_after_secs)?;
+    // Same as a deposit: refreshed here, so a withdrawal cannot be priced against a
+    // delegation that was slashed while nobody was watching.
+    let mut totals = refresh_totals(deps.branch(), &env, &config)?;
 
     let pool = pool_totals(deps.as_ref(), &env, &config, &totals, Uint128::zero())?;
     let owed = math::assets_for_shares(amount, &pool)?;
@@ -545,7 +555,7 @@ fn execute_bootstrap(
         })?))
 }
 
-fn execute_deposit(deps: DepsMut, env: Env, info: MessageInfo) -> Result<Response, ContractError> {
+fn execute_deposit(mut deps: DepsMut, env: Env, info: MessageInfo) -> Result<Response, ContractError> {
     let config = CONFIG.load(deps.storage)?;
     if config.paused {
         return Err(ContractError::Paused);
@@ -560,9 +570,9 @@ fn execute_deposit(deps: DepsMut, env: Env, info: MessageInfo) -> Result<Respons
         });
     }
 
-    let now = env.block.time.seconds();
-    let totals = TOTALS.load(deps.storage)?;
-    totals.assert_fresh(now, config.params.sync_stale_after_secs)?;
+    // Priced against delegations read in this very transaction. The protocol therefore
+    // does not depend on the keeper being alive for anyone to deposit.
+    let totals = refresh_totals(deps.branch(), &env, &config)?;
 
     // The deposit is already sitting in the contract's balance by the time this runs, so
     // it has to come back out before pricing — otherwise the depositor would be buying
@@ -603,11 +613,89 @@ fn execute_deposit(deps: DepsMut, env: Env, info: MessageInfo) -> Result<Respons
         })?))
 }
 
+/// Re-read one validator's delegation into its cached entry.
+///
+/// Reading the delegation back, rather than trusting the running total, is what makes
+/// slashing visible: a slashed delegation simply reports less than was put in, and the
+/// exchange rate follows it down.
+fn read_delegation(
+    deps: Deps,
+    contract: &Addr,
+    entry: &mut ValidatorEntry,
+    denom: &str,
+) -> Result<(), ContractError> {
+    match deps.querier.query_delegation(contract, &entry.address)? {
+        Some(d) => {
+            entry.bonded = d.amount.amount;
+            entry.pending_rewards = d
+                .accumulated_rewards
+                .iter()
+                .find(|c| c.denom == denom)
+                .map(|c| c.amount)
+                .unwrap_or_else(Uint128::zero);
+        }
+        None => {
+            // The delegation is gone entirely — the validator was tombstoned, or the
+            // stake was fully undelegated elsewhere. Zero is the honest reading.
+            entry.bonded = Uint128::zero();
+            entry.pending_rewards = Uint128::zero();
+        }
+    }
+    Ok(())
+}
+
+/// Re-read the whole validator set and return the totals that result.
+///
+/// Deposits and withdrawals call this before pricing, so a user is always priced against
+/// delegations read in their own transaction rather than against a cache someone else was
+/// supposed to refresh. That closes two problems at once: the protocol stops going offline
+/// when the keeper does, and the arbitrage window around a slashing — previously as wide as
+/// `sync_stale_after_secs` — closes entirely on the paths where money moves.
+///
+/// The sweep is not paginated. It was, on the assumption that reading a validator is
+/// expensive; measurement put it near 7 000 gas, so a whole set costs less than the
+/// second transaction paging would have needed. `MAX_VALIDATORS` bounds it.
+fn refresh_totals(deps: DepsMut, env: &Env, config: &Config) -> Result<TotalsCache, ContractError> {
+    let mut set = VALIDATORS.load(deps.storage)?;
+    if set.is_empty() {
+        return Err(ContractError::EmptyValidatorSet);
+    }
+
+    for entry in set.iter_mut() {
+        read_delegation(
+            deps.as_ref(),
+            &env.contract.address,
+            entry,
+            &config.bonded_denom,
+        )?;
+    }
+
+    let total_bonded = validators::total_bonded(&set);
+    let pending_rewards = set
+        .iter()
+        .fold(Uint128::zero(), |acc, v| acc + v.pending_rewards);
+
+    VALIDATORS.save(deps.storage, &set)?;
+    // A complete sweep supersedes any partial one the keeper left behind.
+    SYNC_CURSOR.save(deps.storage, &0)?;
+
+    let mut totals = TOTALS.load(deps.storage)?;
+    totals.total_bonded = total_bonded;
+    totals.pending_rewards = pending_rewards;
+    if let Some(token) = &config.token {
+        totals.total_supply = query_total_supply(deps.as_ref(), token)?;
+    }
+    totals.last_sync_time = env.block.time.seconds();
+    TOTALS.save(deps.storage, &totals)?;
+
+    Ok(totals)
+}
+
 /// Refresh cached totals from on-chain staking queries.
 ///
-/// Permissionless by design: freshness gates deposits and withdrawals, so anyone who
-/// wants to transact must be able to restore it without asking permission. The keeper
-/// runs it on a schedule; users can unblock themselves if the keeper is down.
+/// Permissionless by design. Deposits and withdrawals refresh themselves, so this is no
+/// longer what stands between a user and transacting; it exists so the keeper can keep
+/// `Compound` and the reported rate current on a protocol nobody happens to be using.
 fn execute_sync(deps: DepsMut, env: Env, limit: Option<u32>) -> Result<Response, ContractError> {
     let config = CONFIG.load(deps.storage)?;
     let mut set = VALIDATORS.load(deps.storage)?;
@@ -621,30 +709,12 @@ fn execute_sync(deps: DepsMut, env: Env, limit: Option<u32>) -> Result<Response,
     let end = (cursor + limit).min(set.len());
 
     for entry in set.iter_mut().take(end).skip(cursor) {
-        // Reading the delegation back, rather than trusting the running total, is what
-        // makes slashing visible: a slashed delegation simply reports less than was put
-        // in, and the exchange rate follows it down.
-        let delegation = deps
-            .querier
-            .query_delegation(&env.contract.address, &entry.address)?;
-
-        match delegation {
-            Some(d) => {
-                entry.bonded = d.amount.amount;
-                entry.pending_rewards = d
-                    .accumulated_rewards
-                    .iter()
-                    .find(|c| c.denom == config.bonded_denom)
-                    .map(|c| c.amount)
-                    .unwrap_or_else(Uint128::zero);
-            }
-            None => {
-                // The delegation is gone entirely — the validator was tombstoned, or the
-                // stake was fully undelegated elsewhere. Zero is the honest reading.
-                entry.bonded = Uint128::zero();
-                entry.pending_rewards = Uint128::zero();
-            }
-        }
+        read_delegation(
+            deps.as_ref(),
+            &env.contract.address,
+            entry,
+            &config.bonded_denom,
+        )?;
     }
 
     let done = end >= set.len();

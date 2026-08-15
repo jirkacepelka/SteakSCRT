@@ -38,6 +38,17 @@ pub const MAX_VALIDATOR_WEIGHT_BPS: u16 = 2_500; // 25%
 /// per (delegator, validator) pair. The protocol must stay strictly below it.
 pub const CHAIN_MAX_UNBOND_ENTRIES: u8 = 7;
 
+/// Largest allowlist the protocol will accept.
+///
+/// Deposits and withdrawals re-read every validator's delegation before pricing, so the
+/// size of this set lands in the gas bill of every user action. Measured on a devnet, a
+/// validator costs roughly 7 000 gas to read, which puts a twenty-validator set at about
+/// 140 000 gas of refresh on top of an 87 000-gas deposit — noticeable, and still an order
+/// of magnitude below anything that would threaten a block.
+///
+/// Twenty is also far more than the 25% concentration ceiling needs; that requires four.
+pub const MAX_VALIDATORS: usize = 20;
+
 const BPS_DENOM: u128 = 10_000;
 
 /// Total assets backing the derivative token.

@@ -18,16 +18,6 @@ pub enum ContractError {
     #[error("derivative token is already registered")]
     TokenAlreadyRegistered,
 
-    /// Cached totals are older than `sync_stale_after_secs`.
-    ///
-    /// Pricing a deposit or a withdrawal against stale totals is how a slashing event
-    /// gets arbitraged, so the contract refuses rather than guesses.
-    #[error("cached totals are stale (last sync {last_sync}s, now {now}s, max age {max_age}s) — call Sync first")]
-    StaleTotals {
-        last_sync: u64,
-        now: u64,
-        max_age: u64,
-    },
 
     #[error("expected exactly one coin of denom {expected}")]
     WrongDenom { expected: String },
@@ -46,6 +36,11 @@ pub enum ContractError {
 
     #[error("validator set must not be empty")]
     EmptyValidatorSet,
+
+    /// Every deposit and withdrawal re-reads the whole set, so its size is a gas cost
+    /// users pay. Bounded in code rather than left to configuration.
+    #[error("validator set of {got} exceeds the maximum of {max}")]
+    TooManyValidators { got: usize, max: usize },
 
     #[error("duplicate validator {address}")]
     DuplicateValidator { address: String },
