@@ -78,9 +78,33 @@ export function loadConfig(argv: string[] = process.argv.slice(2)): KeeperConfig
     // refuses early closes, so a no-op costs one failed simulation.
     windowIntervalMs: duration("WINDOW_INTERVAL", 15 * 60_000),
 
-    pageLimit: Number(process.env.PAGE_LIMIT ?? 3),
-    gasLimit: Number(process.env.GAS_LIMIT ?? 1_500_000),
-    gasPrice: process.env.GAS_PRICE ?? "0.1uscrt",
+    /*
+     * Sized from measurement, not from caution. Against a four-validator devnet:
+     *
+     *   sync,  1 validator    44 910 gas
+     *   sync,  4 validators   66 689 gas
+     *   compound, 4           99 601 gas
+     *
+     * so a validator costs roughly 7 000 gas and the fixed cost of being a transaction
+     * at all is around 38 000. Two consequences, both of which the old defaults got
+     * backwards.
+     *
+     * Paging is a false economy at this size. The same four validators cost 66 689 gas in
+     * one call and 107 496 in two, because the second transaction pays the base cost
+     * again. Paging exists so a huge set cannot exceed the block gas limit; at 7 000 gas
+     * each, fifty validators still fit in one call, so the page should cover the whole
+     * allowlist and only shrink if a set ever grows past that.
+     *
+     * The gas limit is charged in full. Cosmos takes the fee you declare, not the gas you
+     * burn, so declaring 1 500 000 for a 67 000-gas transaction was paying 22x over the
+     * odds on every single one. 400 000 keeps a wide margin over the largest measured
+     * call and still costs a fraction.
+     */
+    pageLimit: Number(process.env.PAGE_LIMIT ?? 25),
+    gasLimit: Number(process.env.GAS_LIMIT ?? 400_000),
+    // The chain's minimum is 0.0125 uscrt. Twice that absorbs a min-price change without
+    // an emergency redeploy; the old 0.1 was eight times the floor for no reason.
+    gasPrice: process.env.GAS_PRICE ?? "0.025uscrt",
 
     once: argv.includes("--once"),
     checkOnly: argv.includes("--check-only"),
