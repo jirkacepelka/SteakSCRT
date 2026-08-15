@@ -243,26 +243,23 @@ export default function StakingPage() {
           </div>
         )}
 
-        {stale && (
-          <div className="status status--err">
-            Cached totals are stale, so deposits and withdrawals are refused until someone
-            runs a sync. Nobody&apos;s funds are at risk — the contract is refusing to price
-            against figures it no longer trusts.
-          </div>
-        )}
-
         <button
           className="btn"
           onClick={submit}
           disabled={!connection || busy || stale || !amount}
+          // The contract refuses to price against totals it no longer trusts, so the
+          // button says why it is dead rather than leaving the user to guess.
+          title={stale ? "Cached totals are stale; the contract is refusing to price." : undefined}
         >
           {!connection
             ? "Connect wallet"
-            : busy
-              ? "Confirm in wallet…"
-              : mode === "stake"
-                ? "Stake"
-                : "Request withdrawal"}
+            : stale
+              ? "Waiting for sync"
+              : busy
+                ? "Confirm in wallet…"
+                : mode === "stake"
+                  ? "Stake"
+                  : "Request withdrawal"}
         </button>
 
         {feedback.kind !== "idle" && <Status feedback={feedback} />}
@@ -277,12 +274,6 @@ export default function StakingPage() {
             onClaim={claim}
           />
         )}
-
-        <p className="note" style={{ textAlign: "center", marginTop: 10 }}>
-          Your dSCRT balance and transfers are private. Deposits, withdrawals, the exchange
-          rate and every window&apos;s size are public — Secret encrypts contract state, not
-          the bank or staking modules.
-        </p>
       </div>
     </div>
   );
