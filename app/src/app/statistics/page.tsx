@@ -291,7 +291,11 @@ export default function StatisticsPage() {
                 <Info size={15} />
                 <span>
                   Nobody has run upkeep lately, so rewards are sitting uncompounded. This
-                  costs yield — deposits, withdrawals and claims are unaffected.
+                  costs yield — deposits, withdrawals and claims are unaffected. Anyone can{" "}
+                  <a className="link" href="/keeper">
+                    run it themselves
+                  </a>
+                  .
                 </span>
               </div>
             )}

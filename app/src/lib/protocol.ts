@@ -5,7 +5,7 @@
  * screens do no message building of their own.
  */
 
-import type { SecretNetworkClient } from "secretjs";
+import { MsgExecuteContract, type SecretNetworkClient } from "secretjs";
 
 import { DEPLOYMENT, DENOM, readOnlyClient, toBase64, type Connection } from "./chain";
 
@@ -217,6 +217,74 @@ export const GAS = {
   /** Manager actions scale with the set but are rare and not user-facing. */
   manage: 700_000,
 } as const;
+
+/**
+ * Gas for one upkeep transaction, sized like the keeper's own.
+ *
+ * Compound is the expensive shape — a query, a reward withdrawal and, at the end, a
+ * delegation and a mint per validator — so its measured cost sizes the whole batch. The
+ * keeper uses the same numbers, in `keeper/src/client.ts`; `scripts/gas-probe.mjs` checks
+ * both against a live devnet.
+ */
+const UPKEEP_BASE_GAS = 95_000;
+const UPKEEP_PER_VALIDATOR = 9_300;
+
+export function upkeepGas(validators: number | undefined, tasks: number): number {
+  const n = validators && validators > 0 ? validators : MAX_VALIDATORS;
+  const one = UPKEEP_BASE_GAS + UPKEEP_PER_VALIDATOR * n;
+  // Batched messages share one transaction's fixed cost, so this is not simply n x one.
+  return Math.ceil((one + (tasks - 1) * UPKEEP_PER_VALIDATOR * n) * GAS_MARGIN);
+}
+
+/** What a fee of this many gas units costs, in uscrt. */
+export function gasCost(limit: number): number {
+  return Math.ceil(limit * GAS_PRICE);
+}
+
+export type UpkeepTask = "sync" | "compound" | "advance_window" | "collect_matured";
+
+const UPKEEP_MSG: Record<UpkeepTask, object> = {
+  sync: { sync: { limit: MAX_VALIDATORS } },
+  compound: { compound: { limit: MAX_VALIDATORS } },
+  advance_window: { advance_window: {} },
+  collect_matured: { collect_matured: { limit: MAX_VALIDATORS } },
+};
+
+/**
+ * Run upkeep, as anybody may.
+ *
+ * Every one of these is permissionless and idempotent by design: the contract refuses what
+ * is not due, and running one twice is harmless. That is what makes the keeper replaceable
+ * rather than trusted — and what lets this be a button in a web page rather than a server.
+ *
+ * Sent as one transaction so the batch pays one base cost instead of four, and so a caller
+ * is not left having paid for half the work.
+ */
+export async function runUpkeep(
+  conn: Connection,
+  tasks: UpkeepTask[],
+  validators?: number,
+) {
+  if (tasks.length === 0) throw new Error("Nothing is due.");
+
+  const messages = tasks.map(
+    (task) =>
+      new MsgExecuteContract({
+        sender: conn.address,
+        contract_address: DEPLOYMENT.core.address,
+        code_hash: DEPLOYMENT.core.codeHash,
+        msg: UPKEEP_MSG[task],
+        sent_funds: [],
+      }),
+  );
+
+  const tx = await conn.client.tx.broadcast(messages, {
+    gasLimit: upkeepGas(validators, tasks.length),
+    gasPriceInFeeDenom: GAS_PRICE,
+  });
+  if (tx.code !== 0) throw new Error(tx.rawLog);
+  return tx;
+}
 
 async function execCore(
   conn: Connection,
