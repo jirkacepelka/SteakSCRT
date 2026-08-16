@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 
-import { ArrowDown, ChevronDown, Clock, Info, Spinner } from "@/components/Icon";
+import { ChevronDown, Clock, Info, Spinner } from "@/components/Icon";
 import { readable, useToast } from "@/components/Toast";
 import { Unconfigured } from "@/components/Unconfigured";
 import { useWallet } from "@/components/Wallet";
@@ -212,8 +212,27 @@ export default function StakePage() {
             <div className="amount-head">
               <span>{mode === "stake" ? "You stake" : "You return"}</span>
               {balance && (
-                <span>
-                  Balance <span className="num">{fromMicro(balance)}</span>
+                <span className="amount-actions">
+                  <span>
+                    Balance <span className="num">{fromMicro(balance)}</span>
+                  </span>
+                  {balance !== "0" &&
+                    ([50, 100] as const).map((pct) => (
+                      <button
+                        key={pct}
+                        className="mini"
+                        onClick={() => {
+                          // Max leaves a little SCRT behind so the transaction can pay its
+                          // own gas. Spending the lot is a footgun, not a feature.
+                          const reserve = mode === "stake" && pct === 100 ? GAS_RESERVE : 0n;
+                          const usable =
+                            BigInt(balance) > reserve ? BigInt(balance) - reserve : 0n;
+                          setAmount((Number((usable * BigInt(pct)) / 100n) / 1e6).toFixed(6));
+                        }}
+                      >
+                        {pct === 100 ? "Max" : "Half"}
+                      </button>
+                    ))}
                 </span>
               )}
             </div>
@@ -232,66 +251,9 @@ export default function StakePage() {
               </span>
             </div>
 
-            <div className="amount-foot">
-              <span>
-                {overBalance ? (
-                  <span style={{ color: "var(--bad)" }}>More than you hold</span>
-                ) : valid ? (
-                  <span className="num">≈ {converted.toFixed(6)} {outSymbol}</span>
-                ) : null}
-              </span>
-              {balance && balance !== "0" && (
-                <span style={{ display: "flex", gap: 4 }}>
-                  {([25, 50, 100] as const).map((pct) => (
-                    <button
-                      key={pct}
-                      className="mini"
-                      onClick={() => {
-                        // Max leaves a little SCRT behind so the transaction can pay its own
-                        // gas. Spending the lot is a footgun, not a feature.
-                        const reserve = mode === "stake" && pct === 100 ? GAS_RESERVE : 0n;
-                        const usable =
-                          BigInt(balance) > reserve ? BigInt(balance) - reserve : 0n;
-                        setAmount((Number((usable * BigInt(pct)) / 100n) / 1e6).toFixed(6));
-                      }}
-                    >
-                      {pct === 100 ? "Max" : `${pct}%`}
-                    </button>
-                  ))}
-                </span>
-              )}
-            </div>
-          </div>
-
-          <div className="seam">
-            <span className="seam-mark">
-              <ArrowDown size={15} />
-            </span>
-          </div>
-
-          <div className="well" style={{ paddingTop: "var(--s-5)" }}>
-            <div className="amount-head" style={{ marginBottom: "var(--s-2)" }}>
-              <span>You receive</span>
-            </div>
-            <div className="amount-row">
-              <span
-                className="num"
-                style={{
-                  flex: 1,
-                  fontFamily: "var(--font-display)",
-                  fontSize: 30,
-                  fontWeight: 600,
-                  letterSpacing: "-0.03em",
-                  color: valid ? "var(--ink)" : "var(--ink-3)",
-                }}
-              >
-                {converted > 0 ? converted.toFixed(6) : "0"}
-              </span>
-              <span className="token">
-                <img src="/brand/scrt.png" alt="" width={24} height={24} />
-                {outSymbol}
-              </span>
-            </div>
+            {overBalance && (
+              <span style={{ fontSize: 12.5, color: "var(--bad)" }}>More than you hold</span>
+            )}
           </div>
 
           {mode === "unstake" && maturity && (
@@ -312,28 +274,20 @@ export default function StakePage() {
             </div>
           )}
 
-          <button
-            className="btn btn--block btn--lg"
-            style={{ marginTop: "var(--s-4)" }}
-            onClick={submit}
-            disabled={connection ? disabled : connecting}
-          >
-            {busy && <Spinner size={16} />}
-            {label}
-          </button>
-
-          <details className="details" style={{ marginTop: "var(--s-4)" }}>
+          <details className="details" style={{ marginTop: "var(--s-3)" }}>
             <summary>
-              <span>
-                1 dSCRT ={" "}
-                <span className="num" style={{ color: "var(--ink)" }}>
-                  {rate.toFixed(5)}
-                </span>{" "}
-                SCRT
+              <span>You receive</span>
+              <span className="result">
+                <span className="num">{converted > 0 ? converted.toFixed(6) : "0"}</span>
+                <span className="unit">{outSymbol}</span>
+                <ChevronDown size={16} />
               </span>
-              <ChevronDown size={16} />
             </summary>
             <div className="details-body">
+              <div className="row">
+                <span className="k">Exchange rate</span>
+                <span className="v num">1 dSCRT = {rate.toFixed(5)} SCRT</span>
+              </div>
               <div className="row">
                 <span className="k">Performance fee</span>
                 <span className="v num">
@@ -363,6 +317,16 @@ export default function StakePage() {
               </div>
             </div>
           </details>
+
+          <button
+            className="btn btn--block btn--lg"
+            style={{ marginTop: "var(--s-2)" }}
+            onClick={submit}
+            disabled={connection ? disabled : connecting}
+          >
+            {busy && <Spinner size={16} />}
+            {label}
+          </button>
         </div>
 
         <Withdrawals

@@ -581,21 +581,27 @@ code {
 
 /* ---------------------------------------------------------------- amount field */
 
+/*
+ * The amount field is an outline, not a slab.
+ *
+ * Nothing behind it: on a page this quiet a border is enough to say "type here", and a
+ * filled box would be the heaviest thing on a screen whose whole job is one number. The
+ * edge brightens on focus rather than the fill appearing, so the field never changes
+ * weight while somebody is using it.
+ */
 .amount {
-  background: var(--raised);
-  border: 1px solid var(--line);
+  background: transparent;
+  border: 1px solid var(--line-strong);
   border-radius: var(--r-md);
   padding: var(--s-4);
   display: flex;
   flex-direction: column;
   gap: var(--s-3);
-  box-shadow: var(--shadow-md);
-  transition: border-color var(--med) var(--ease), box-shadow var(--med) var(--ease);
+  transition: border-color var(--med) var(--ease);
 }
 
 .amount:focus-within {
-  border-color: var(--line-strong);
-  box-shadow: var(--shadow-lg);
+  border-color: var(--accent);
 }
 
 .amount-head {
@@ -605,6 +611,13 @@ code {
   gap: var(--s-3);
   font-size: 12.5px;
   color: var(--ink-3);
+  min-height: 24px;
+}
+
+.amount-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
 }
 
 .amount-row {
@@ -630,16 +643,6 @@ code {
 
 .amount-row input::placeholder {
   color: var(--ink-3);
-}
-
-.amount-foot {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--s-3);
-  font-size: 12.5px;
-  color: var(--ink-3);
-  min-height: 20px;
 }
 
 .token {
@@ -686,28 +689,6 @@ code {
   cursor: not-allowed;
 }
 
-/* The arrow between the two halves of the swap, sitting over the seam. */
-.seam {
-  display: flex;
-  justify-content: center;
-  height: 0;
-  position: relative;
-  z-index: 1;
-}
-
-.seam-mark {
-  width: 32px;
-  height: 32px;
-  margin-top: -16px;
-  border-radius: var(--r-sm);
-  background: var(--raised);
-  border: 1px solid var(--line);
-  color: var(--ink-2);
-  display: grid;
-  place-items: center;
-  box-shadow: var(--shadow-sm);
-}
-
 /* ---------------------------------------------------------------- rows */
 
 .row {
@@ -747,12 +728,32 @@ code {
 .details summary {
   list-style: none;
   cursor: pointer;
-  padding: var(--s-3) 0;
+  padding: var(--s-4) 0;
   display: flex;
-  align-items: center;
+  align-items: baseline;
   justify-content: space-between;
+  gap: var(--s-4);
   font-size: 13.5px;
   color: var(--ink-2);
+}
+
+/* The received amount, which is the answer the screen exists to give. */
+.details summary .result {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  font-family: var(--font-display);
+  font-size: 22px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  color: var(--ink);
+}
+
+.details summary .result .unit {
+  font-size: 13.5px;
+  font-weight: 520;
+  color: var(--ink-3);
+  letter-spacing: 0;
 }
 
 .details summary::-webkit-details-marker {
