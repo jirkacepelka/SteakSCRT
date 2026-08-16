@@ -33,6 +33,9 @@ import {
 
 type Mode = "stake" | "unstake";
 
+/** Held back by Max, so a deposit of "everything" can still pay its own fee. */
+const GAS_RESERVE = 500_000n;
+
 
 export default function StakePage() {
   const { connection, address, connectWallet, connecting } = useWallet();
@@ -230,6 +233,26 @@ export default function StakePage() {
               </span>
             </div>
 
+            {balance && balance !== "0" && (
+              <div className="amount-chips">
+                {([25, 50, 100] as const).map((pct) => (
+                  <button
+                    key={pct}
+                    className="mini"
+                    onClick={() => {
+                      // Max keeps a little SCRT back so the transaction can pay its own
+                      // gas. Spending the lot is a footgun, not a feature.
+                      const reserve = mode === "stake" && pct === 100 ? GAS_RESERVE : 0n;
+                      const usable = BigInt(balance) > reserve ? BigInt(balance) - reserve : 0n;
+                      setAmount((Number((usable * BigInt(pct)) / 100n) / 1e6).toFixed(6));
+                    }}
+                  >
+                    {pct === 100 ? "Max" : `${pct}%`}
+                  </button>
+                ))}
+              </div>
+            )}
+
             {overBalance && (
               <span style={{ fontSize: 12.5, color: "var(--bad)" }}>More than you hold</span>
             )}
@@ -308,13 +331,15 @@ export default function StakePage() {
           </button>
         </div>
 
-        <Withdrawals
-          connected={Boolean(connection)}
-          claims={claims}
-          busy={busy}
-          onLoad={loadClaims}
-          onClaim={claim}
-        />
+        {mode === "unstake" && (
+          <Withdrawals
+            connected={Boolean(connection)}
+            claims={claims}
+            busy={busy}
+            onLoad={loadClaims}
+            onClaim={claim}
+          />
+        )}
 
         <p className="hint" style={{ marginTop: "var(--s-5)", textAlign: "center" }}>
           Your dSCRT balance and transfers are private. Deposits, withdrawals and the

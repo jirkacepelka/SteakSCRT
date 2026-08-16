@@ -639,6 +639,12 @@ code {
   color: var(--ink-3);
 }
 
+/* Shortcuts, under the amount and its token. */
+.amount-chips {
+  display: flex;
+  gap: var(--s-2);
+}
+
 .token {
   display: inline-flex;
   align-items: center;
