@@ -614,12 +614,6 @@ code {
   min-height: 24px;
 }
 
-.amount-actions {
-  display: flex;
-  align-items: center;
-  gap: var(--s-2);
-}
-
 .amount-row {
   display: flex;
   align-items: center;
@@ -728,32 +722,27 @@ code {
 .details summary {
   list-style: none;
   cursor: pointer;
-  padding: var(--s-4) 0;
+  padding: var(--s-3) 0;
   display: flex;
-  align-items: baseline;
+  align-items: center;
   justify-content: space-between;
   gap: var(--s-4);
   font-size: 13.5px;
   color: var(--ink-2);
 }
 
-/* The received amount, which is the answer the screen exists to give. */
+/* The received amount. Weighted like any other value, not shouted. */
 .details summary .result {
   display: flex;
   align-items: center;
   gap: var(--s-2);
-  font-family: var(--font-display);
-  font-size: 22px;
-  font-weight: 600;
-  letter-spacing: -0.02em;
+  font-weight: 560;
   color: var(--ink);
 }
 
 .details summary .result .unit {
-  font-size: 13.5px;
-  font-weight: 520;
   color: var(--ink-3);
-  letter-spacing: 0;
+  font-weight: 520;
 }
 
 .details summary::-webkit-details-marker {

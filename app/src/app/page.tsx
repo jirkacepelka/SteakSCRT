@@ -33,8 +33,6 @@ import {
 
 type Mode = "stake" | "unstake";
 
-/** Kept for gas, so a Max deposit can still pay for itself. */
-const GAS_RESERVE = 500_000n;
 
 export default function StakePage() {
   const { connection, address, connectWallet, connecting } = useWallet();
@@ -212,27 +210,8 @@ export default function StakePage() {
             <div className="amount-head">
               <span>{mode === "stake" ? "You stake" : "You return"}</span>
               {balance && (
-                <span className="amount-actions">
-                  <span>
-                    Balance <span className="num">{fromMicro(balance)}</span>
-                  </span>
-                  {balance !== "0" &&
-                    ([50, 100] as const).map((pct) => (
-                      <button
-                        key={pct}
-                        className="mini"
-                        onClick={() => {
-                          // Max leaves a little SCRT behind so the transaction can pay its
-                          // own gas. Spending the lot is a footgun, not a feature.
-                          const reserve = mode === "stake" && pct === 100 ? GAS_RESERVE : 0n;
-                          const usable =
-                            BigInt(balance) > reserve ? BigInt(balance) - reserve : 0n;
-                          setAmount((Number((usable * BigInt(pct)) / 100n) / 1e6).toFixed(6));
-                        }}
-                      >
-                        {pct === 100 ? "Max" : "Half"}
-                      </button>
-                    ))}
+                <span>
+                  Balance <span className="num">{fromMicro(balance)}</span>
                 </span>
               )}
             </div>
