@@ -38,6 +38,30 @@ pub const MAX_VALIDATOR_WEIGHT_BPS: u16 = 2_500; // 25%
 /// per (delegator, validator) pair. The protocol must stay strictly below it.
 pub const CHAIN_MAX_UNBOND_ENTRIES: u8 = 7;
 
+/// Ceiling on the derivative supply the protocol will mint.
+///
+/// Denominated in shares, not in SCRT, and the reason is that a cap on assets closes the
+/// door and never reopens it. Rewards accrue at around 23% a year, so assets that reach a
+/// ceiling keep climbing past it on their own; the only thing that could bring them back
+/// under is withdrawals outrunning the yield, which does not happen to a protocol people
+/// want. Deposits would stop permanently.
+///
+/// Supply moves only on mint and burn. It reaches the ceiling, and room appears exactly
+/// when somebody leaves — one out, one in, which is what a cap is supposed to do.
+///
+/// What it bounds is therefore `supply x rate` rather than a fixed number of SCRT, and
+/// that figure grows with the rate. At 23% a year the drift is small next to the
+/// alternative's failure mode, but it is real: this caps how many claims exist, not how
+/// much they are worth.
+///
+/// Compiled in rather than configured, for the same reason as the concentration ceiling:
+/// a cap the manager can raise protects nobody, because a compromised manager raises it
+/// first. Changing it takes a code version the network votes on.
+///
+/// Only deposits are gated. Withdrawals and claims are never refused by it — a cap that
+/// could trap money would be worse than no cap.
+pub const MAX_TOTAL_SUPPLY: u128 = 100_000_000_000; // 100k dSCRT
+
 /// Largest allowlist the protocol will accept.
 ///
 /// Deposits and withdrawals re-read every validator's delegation before pricing, so the

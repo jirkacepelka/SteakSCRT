@@ -28,6 +28,13 @@ pub enum ContractError {
     #[error("amount rounds to zero shares")]
     ZeroShares,
 
+    /// The deposit would push the protocol past the ceiling compiled into the contract.
+    ///
+    /// Deposits only. Withdrawals and claims are never gated by this, so a full protocol
+    /// stops taking money in rather than trapping what it already holds.
+    #[error("deposit would take the derivative supply to {would_mint}, above the {cap} ceiling")]
+    CapExceeded { would_mint: Uint128, cap: Uint128 },
+
     #[error("amount must be greater than zero")]
     ZeroAmount,
 

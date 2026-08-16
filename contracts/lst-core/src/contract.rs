@@ -676,6 +676,19 @@ fn execute_deposit(mut deps: DepsMut, env: Env, info: MessageInfo) -> Result<Res
         return Err(ContractError::ZeroShares);
     }
 
+    // Checked against the supply this deposit would leave behind, not the one it finds, so
+    // the deposit that crosses the ceiling is the one refused rather than the one after.
+    let would_mint = pool
+        .supply
+        .checked_add(shares)
+        .map_err(|_| ContractError::Overflow { context: "supply cap" })?;
+    if would_mint > Uint128::new(math::MAX_TOTAL_SUPPLY) {
+        return Err(ContractError::CapExceeded {
+            would_mint,
+            cap: Uint128::new(math::MAX_TOTAL_SUPPLY),
+        });
+    }
+
     let mut set = VALIDATORS.load(deps.storage)?;
     let idx = validators::select_for_delegation(&set, deposit)?;
     set[idx].bonded += deposit;

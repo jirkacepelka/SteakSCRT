@@ -629,6 +629,74 @@ fn a_deposit_in_the_wrong_denom_is_rejected() {
 }
 
 #[test]
+fn a_deposit_past_the_ceiling_is_refused() {
+    // The ceiling bounds how many claims can exist while the code is young. It is checked
+    // against the supply the deposit would leave behind, so the one that crosses it is the
+    // one refused rather than the one after.
+    let (mut deps, env) = bootstrapped();
+
+    let cap = lst_core::math::MAX_TOTAL_SUPPLY;
+    // A pool already one SCRT short of the ceiling, priced at parity.
+    set_delegations(&mut deps, &env, &[(V1, cap - 1_000_000, 0)]);
+    set_token_supply(&mut deps, cap - 1_000_000);
+
+    deps.querier.update_balance(
+        env.contract.address.clone(),
+        vec![Coin::new(5_000_000, DENOM)],
+    );
+    let err = execute(
+        deps.as_mut(),
+        env,
+        mock_info(USER, &[Coin::new(5_000_000, DENOM)]),
+        ExecuteMsg::Deposit {},
+    )
+    .unwrap_err();
+
+    assert!(
+        matches!(err, ContractError::CapExceeded { cap: c, .. } if c == Uint128::new(cap)),
+        "got {err:?}"
+    );
+}
+
+#[test]
+fn the_ceiling_does_not_move_when_rewards_accrue() {
+    // The reason the ceiling counts shares rather than SCRT. Rewards push the pool's
+    // assets up every block; if the ceiling were denominated in assets it would be crossed
+    // by yield alone and deposits would close permanently, since nothing brings assets
+    // back down except withdrawals outrunning the yield.
+    let (mut deps, env) = bootstrapped();
+
+    // 50k dSCRT priced at 3 SCRT each: assets of 150k SCRT, half again as much as the
+    // share ceiling would allow if it were counted in SCRT, and the supply still under it.
+    set_delegations(&mut deps, &env, &[(V1, 150_000_000_000, 0)]);
+    set_token_supply(&mut deps, 50_000_000_000);
+
+    deps.querier.update_balance(
+        env.contract.address.clone(),
+        vec![Coin::new(5_000_000, DENOM)],
+    );
+    execute(
+        deps.as_mut(),
+        env,
+        mock_info(USER, &[Coin::new(5_000_000, DENOM)]),
+        ExecuteMsg::Deposit {},
+    )
+    .expect("a pool rich in rewards must still accept deposits");
+}
+
+#[test]
+fn the_ceiling_never_blocks_a_withdrawal() {
+    // A cap that could trap money would be worse than no cap. Deposits stop; the way out
+    // stays open.
+    let (mut deps, env) = with_user_deposit();
+
+    set_token_supply(&mut deps, lst_core::math::MAX_TOTAL_SUPPLY + 1_000_000);
+
+    unbond(&mut deps, &env, USER, 1_000_000)
+        .expect("being over the ceiling must not stop someone leaving");
+}
+
+#[test]
 fn a_deposit_prices_against_the_chain_not_against_its_own_cache() {
     // The fixtures mirror what the contract believes into the mocked staking module, so
     // on their own they cannot prove the refresh reads anything at all. This makes the
