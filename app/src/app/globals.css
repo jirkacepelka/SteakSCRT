@@ -86,8 +86,13 @@
 }
 
 [data-theme="light"] {
-  --bg: #fbfbfc;
-  --bg-glow: #f1f4f8;
+  /*
+   * Deliberately not white. The slabs are, and a white page under white cards leaves them
+   * resting on nothing but their own shadow — the floating reads as a rendering artefact
+   * rather than as a choice. A few percent of grey is all it takes.
+   */
+  --bg: #eef1f5;
+  --bg-glow: #ffffff;
   --surface: #ffffff;
   --raised: #ffffff;
   --sunken: #f4f6f9;
@@ -112,9 +117,9 @@
   --warn-wash: rgba(168, 119, 15, 0.1);
   --bad-wash: rgba(200, 80, 58, 0.1);
 
-  --shadow-sm: 0 1px 2px rgba(16, 24, 40, 0.05);
-  --shadow-md: 0 8px 24px -10px rgba(16, 24, 40, 0.14);
-  --shadow-lg: 0 24px 60px -24px rgba(16, 24, 40, 0.2);
+  --shadow-sm: 0 1px 2px rgba(16, 24, 40, 0.06);
+  --shadow-md: 0 10px 28px -12px rgba(16, 24, 40, 0.22);
+  --shadow-lg: 0 28px 64px -24px rgba(16, 24, 40, 0.28);
 }
 
 /* ---------------------------------------------------------------- base */
@@ -138,13 +143,16 @@ body {
   font-size: 15px;
   line-height: 1.5;
   -webkit-font-smoothing: antialiased;
-  /* A single very soft light source behind the page, so the card has something to sit on
-     rather than floating on flat black. */
-  background-image: radial-gradient(
-    120ch 60ch at 50% -10%,
-    var(--bg-glow) 0%,
-    transparent 70%
-  );
+  /*
+   * Two very soft light sources, and nothing else. Once the cards lost their own surface
+   * the page became the backdrop rather than a container, so it has to be worth looking
+   * at: a cool wash overhead and a trace of the accent low and left, both far too diffuse
+   * to read as shapes. Fixed, so the light stays put while the content scrolls past it.
+   */
+  background-image:
+    radial-gradient(90ch 50ch at 50% -8%, var(--bg-glow) 0%, transparent 68%),
+    radial-gradient(70ch 40ch at 8% 105%, var(--accent-wash) 0%, transparent 60%);
+  background-attachment: fixed;
   background-repeat: no-repeat;
 }
 
@@ -408,29 +416,37 @@ code {
 
 /* ---------------------------------------------------------------- surfaces */
 
+/*
+ * The card is a grouping, not a surface.
+ *
+ * It has no fill, no border and no shadow — what floats is what it contains. That inverts
+ * the usual depth: fields used to be wells sunk into a card, and are now slabs lifted off
+ * the page, which is the only reading that makes sense once there is nothing behind them.
+ */
 .card {
+  border-radius: var(--r-lg);
+}
+
+/* A panel still gathers things, but as lightly as it can while staying legible. */
+.panel {
   background: var(--raised);
   border: 1px solid var(--line);
   border-radius: var(--r-lg);
-  box-shadow: var(--shadow-md);
+  padding: var(--s-5);
+  box-shadow: var(--shadow-sm);
 }
 
 .card--flat {
   box-shadow: none;
 }
 
-.panel {
-  background: var(--surface);
-  border: 1px solid var(--line);
-  border-radius: var(--r-md);
-  padding: var(--s-5);
-}
-
+/* The lifted slab: every real surface in the app is one of these. */
 .well {
-  background: var(--sunken);
+  background: var(--raised);
   border: 1px solid var(--line);
   border-radius: var(--r-md);
   padding: var(--s-4);
+  box-shadow: var(--shadow-md);
 }
 
 .stack {
@@ -485,6 +501,10 @@ code {
   flex-direction: column;
   gap: var(--s-2);
   min-width: 0;
+  background: var(--raised);
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-sm);
 }
 
 .stat-label {
@@ -562,18 +582,20 @@ code {
 /* ---------------------------------------------------------------- amount field */
 
 .amount {
-  background: var(--sunken);
+  background: var(--raised);
   border: 1px solid var(--line);
   border-radius: var(--r-md);
   padding: var(--s-4);
   display: flex;
   flex-direction: column;
   gap: var(--s-3);
-  transition: border-color var(--med) var(--ease);
+  box-shadow: var(--shadow-md);
+  transition: border-color var(--med) var(--ease), box-shadow var(--med) var(--ease);
 }
 
 .amount:focus-within {
   border-color: var(--line-strong);
+  box-shadow: var(--shadow-lg);
 }
 
 .amount-head {
@@ -624,7 +646,7 @@ code {
   display: inline-flex;
   align-items: center;
   gap: var(--s-2);
-  background: var(--raised);
+  background: var(--sunken);
   border: 1px solid var(--line);
   border-radius: var(--r-full);
   padding: 6px 12px 6px 6px;
