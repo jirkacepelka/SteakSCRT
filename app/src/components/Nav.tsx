@@ -2,42 +2,76 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { useState } from "react";
 
+import { DEPLOYMENT } from "@/lib/chain";
+import { isDefaultEndpoint } from "@/lib/endpoint";
+
+import { Settings as SettingsIcon } from "./Icon";
+import { SettingsDialog } from "./Settings";
 import { ConnectButton } from "./Wallet";
 
 const TABS = [
-  { href: "/", label: "Staking" },
+  { href: "/", label: "Stake" },
   { href: "/statistics", label: "Statistics" },
   { href: "/governance", label: "Governance" },
 ];
 
+/** Testnets say so. Nobody should discover which chain they are on from a failed transaction. */
+function NetworkPill() {
+  const isMainnet = DEPLOYMENT.chainId === "secret-4";
+  if (isMainnet) return null;
+  return (
+    <span className="pill pill--warn pill--net" title={DEPLOYMENT.chainId}>
+      <span className="dot" />
+      <span>{DEPLOYMENT.chainId}</span>
+    </span>
+  );
+}
+
 export function Nav() {
   const pathname = usePathname();
+  const [settings, setSettings] = useState(false);
 
   return (
-    <nav className="nav">
-      <Link href="/" className="brand">
-        {/* The mark exported from the design, used as-is at its designed 30×30. */}
-        <img className="brand-mark" src="/brand/steak.svg" alt="" width={30} height={30} />
-        Steak<sup>scrt</sup>
-      </Link>
-
-      <div className="nav-tabs">
-        {TABS.map((tab) => (
-          <Link
-            key={tab.href}
-            href={tab.href}
-            className="nav-tab"
-            aria-current={pathname === tab.href ? "page" : undefined}
-          >
-            {tab.label}
+    <>
+      <nav className="nav">
+        <div className="nav-inner">
+          <Link href="/" className="brand">
+            <img src="/brand/steak.svg" alt="" width={26} height={26} />
+            Steak<sup>scrt</sup>
           </Link>
-        ))}
-      </div>
 
-      <div className="nav-actions">
-        <ConnectButton />
-      </div>
-    </nav>
+          <div className="tabs">
+            {TABS.map((tab) => (
+              <Link
+                key={tab.href}
+                href={tab.href}
+                className="tab"
+                aria-current={pathname === tab.href ? "page" : undefined}
+              >
+                {tab.label}
+              </Link>
+            ))}
+          </div>
+
+          <div className="nav-end">
+            <NetworkPill />
+            <button
+              className="icon-btn"
+              onClick={() => setSettings(true)}
+              aria-label="Settings"
+              title={isDefaultEndpoint() ? "Settings" : "Settings — custom node in use"}
+              style={isDefaultEndpoint() ? undefined : { borderColor: "var(--accent)", color: "var(--accent)" }}
+            >
+              <SettingsIcon size={17} />
+            </button>
+            <ConnectButton />
+          </div>
+        </div>
+      </nav>
+
+      {settings && <SettingsDialog onClose={() => setSettings(false)} />}
+    </>
   );
 }

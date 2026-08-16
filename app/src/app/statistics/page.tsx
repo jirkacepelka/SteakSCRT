@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 
 import { BarList, LineChart } from "@/components/Chart";
+import { Info, Spinner } from "@/components/Icon";
 import { Unconfigured } from "@/components/Unconfigured";
 import { CONFIGURED, fromMicro, rateToNumber, shortAddress, whenFrom } from "@/lib/chain";
 import { fetchHistory, type History, type Range } from "@/lib/history";
@@ -27,7 +28,7 @@ export default function StatisticsPage() {
 
   const [range, setRange] = useState<Range>("7d");
   const [history, setHistory] = useState<History | null>(null);
-  const [loadingHistory, setLoadingHistory] = useState(true);
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     if (!CONFIGURED) return;
@@ -48,15 +49,11 @@ export default function StatisticsPage() {
   useEffect(() => {
     if (!CONFIGURED) return;
     let cancelled = false;
-    setLoadingHistory(true);
+    setLoading(true);
     void fetchHistory(range)
-      .then((h) => {
-        if (!cancelled) setHistory(h);
-      })
+      .then((h) => !cancelled && setHistory(h))
       .catch(() => undefined)
-      .finally(() => {
-        if (!cancelled) setLoadingHistory(false);
-      });
+      .finally(() => !cancelled && setLoading(false));
     return () => {
       cancelled = true;
     };
@@ -66,8 +63,6 @@ export default function StatisticsPage() {
     () =>
       (history?.samples ?? []).map((s) => ({
         x: s.time,
-        // TVL is what the protocol actually holds: delegated, plus rewards not yet
-        // compounded, plus anything sitting undeployed.
         y:
           (Number(s.state.total_bonded) +
             Number(s.state.pending_rewards) +
@@ -86,35 +81,27 @@ export default function StatisticsPage() {
     [history],
   );
 
-  const totalBonded = validators.reduce((sum, v) => sum + Number(v.bonded), 0);
-  const active = validators.filter((v) => v.status !== "removed");
-
   /**
    * Annualised from the observed rate rather than from the chain's nominal staking APR.
    *
    * The nominal figure ignores this protocol's fee and its idle cash. What holders
    * actually earn is how fast the exchange rate moved, so that is what gets shown — and
-   * only once there is enough of a window to mean anything.
+   * only once there is enough of a window for it to mean anything.
    */
-  const observedApy = useMemo(() => {
+  const apy = useMemo(() => {
     const samples = history?.samples ?? [];
     if (samples.length < 2) return null;
-
     const first = samples[0]!;
     const last = samples[samples.length - 1]!;
     const days = (last.time - first.time) / 86_400;
     if (days < 0.5) return null;
-
     const from = rateToNumber(first.state.exchange_rate);
     const to = rateToNumber(last.state.exchange_rate);
     if (from <= 0 || to <= from) return null;
-
     return (Math.pow(to / from, 365 / days) - 1) * 100;
   }, [history]);
 
-  const queued = windows
-    .filter((w) => w.state === "open" || w.state === "unbonding")
-    .reduce((sum, w) => sum + Number(w.scrt_owed), 0);
+  if (!CONFIGURED) return <Unconfigured />;
 
   const tvl = state
     ? Number(state.total_bonded) +
@@ -122,218 +109,242 @@ export default function StatisticsPage() {
       Number(state.liquid_unallocated)
     : 0;
 
-  if (!CONFIGURED) return <Unconfigured />;
+  const bondedTotal = validators.reduce((sum, v) => sum + Number(v.bonded), 0);
+  const active = validators.filter((v) => v.status !== "removed");
+  const queued = windows
+    .filter((w) => w.state === "open" || w.state === "unbonding")
+    .reduce((sum, w) => sum + Number(w.scrt_owed), 0);
+  const slotsUsed = validators.reduce((n, v) => n + v.active_unbond_entries, 0);
+  const slotCeiling = active.length * (config?.params.max_unbond_entries_per_validator ?? 6);
 
   return (
-    <div>
-      <div
+    <div className="stack" style={{ gap: "var(--s-6)" }}>
+      <header
         style={{
           display: "flex",
-          alignItems: "center",
+          alignItems: "flex-end",
           justifyContent: "space-between",
-          gap: 16,
+          gap: "var(--s-4)",
           flexWrap: "wrap",
-          marginBottom: 20,
         }}
       >
-        <h1 className="h1">Statistics</h1>
-        <div className="segmented segmented--auto">
+        <div>
+          <h1 className="h1">Statistics</h1>
+          <p className="prose" style={{ marginTop: 6 }}>
+            Read from the chain, including the history — there is no indexer behind this.
+          </p>
+        </div>
+        <div className="segmented">
           {RANGES.map((r) => (
             <button key={r} aria-pressed={range === r} onClick={() => setRange(r)}>
               {r}
             </button>
           ))}
         </div>
-      </div>
+      </header>
 
-      {/* Headline numbers first: most visits are one glance at TVL and the rate. */}
-      <div className="grid-4">
-        <div className="stat">
-          <p className="label">Total value locked</p>
-          <span className="stat-value numeral">
-            {state ? fromMicro(tvl, 0) : "—"}
-            <span className="stat-unit">SCRT</span>
-          </span>
-          <p className="stat-note">Delegated, plus rewards and undeployed cash</p>
-        </div>
+      <section className="grid grid-4">
+        <Stat
+          label="Total value locked"
+          value={state ? fromMicro(tvl, 0) : null}
+          unit="SCRT"
+          note="Delegated, plus rewards and undeployed cash"
+        />
+        <Stat
+          label="Exchange rate"
+          value={state ? rateToNumber(state.exchange_rate).toFixed(6) : null}
+          note="SCRT per dSCRT — only falls on a slashing"
+        />
+        <Stat
+          label="Observed APY"
+          value={apy !== null ? `${apy.toFixed(2)}%` : "—"}
+          note={apy !== null ? `From the rate over ${range}, net of fee` : "Needs a longer window"}
+        />
+        <Stat
+          label="dSCRT supply"
+          value={state ? fromMicro(state.total_supply, 0) : null}
+          note="Non-rebasing — moves only on mint and burn"
+        />
+      </section>
 
-        <div className="stat">
-          <p className="label">Exchange rate</p>
-          <span className="stat-value numeral">
-            {state ? rateToNumber(state.exchange_rate).toFixed(6) : "—"}
-          </span>
-          <p className="stat-note">SCRT per dSCRT — never falls except on a slashing</p>
-        </div>
-
-        <div className="stat">
-          <p className="label">Observed APY</p>
-          <span className="stat-value numeral">
-            {observedApy !== null ? `${observedApy.toFixed(2)}%` : "—"}
-          </span>
-          <p className="stat-note">
-            {observedApy !== null
-              ? `From the rate over ${range}, net of fee`
-              : "Needs a longer window"}
-          </p>
-        </div>
-
-        <div className="stat">
-          <p className="label">dSCRT supply</p>
-          <span className="stat-value numeral">
-            {state ? fromMicro(state.total_supply, 0) : "—"}
-          </span>
-          <p className="stat-note">Non-rebasing — this moves only on mint and burn</p>
-        </div>
-      </div>
-
-      <div style={{ height: 16 }} />
-
-      <div className="grid-2">
+      <section className="grid grid-2">
         <div className="panel">
-          <h2 className="h2">Total value locked</h2>
+          <div className="row" style={{ marginBottom: "var(--s-4)" }}>
+            <h2 className="h2">Total value locked</h2>
+            {loading && <Spinner size={14} />}
+          </div>
           <LineChart
             points={tvlPoints}
-            formatY={(v) => `${Math.round(v).toLocaleString()}`}
-            formatX={(v) =>
-              new Date(v * 1000).toLocaleString(undefined, {
-                month: "short",
-                day: "numeric",
-                hour: "2-digit",
-                minute: "2-digit",
-              })
-            }
+            zeroBased
+            formatY={(v) => compact(v)}
+            formatX={stamp}
           />
-          <p className="note">
-            SCRT denominated, so it moves with deposits and rewards rather than with the
-            price. {loadingHistory && "Loading…"}
+          <p className="hint" style={{ marginTop: "var(--s-3)" }}>
+            SCRT-denominated, so it moves with deposits and rewards rather than with the
+            price.
           </p>
         </div>
 
         <div className="panel">
-          <h2 className="h2">Exchange rate</h2>
-          <LineChart
-            points={ratePoints}
-            formatY={(v) => v.toFixed(5)}
-            formatX={(v) =>
-              new Date(v * 1000).toLocaleString(undefined, {
-                month: "short",
-                day: "numeric",
-                hour: "2-digit",
-                minute: "2-digit",
-              })
-            }
-          />
-          <p className="note">
+          <div className="row" style={{ marginBottom: "var(--s-4)" }}>
+            <h2 className="h2">Exchange rate</h2>
+            {loading && <Spinner size={14} />}
+          </div>
+          <LineChart points={ratePoints} formatY={(v) => v.toFixed(5)} formatX={stamp} />
+          <p className="hint" style={{ marginTop: "var(--s-3)" }}>
             One dSCRT in SCRT. Rising is the yield; a fall would mean a validator was
             slashed.
           </p>
         </div>
-      </div>
+      </section>
 
-      <div style={{ height: 16 }} />
+      {history && history.missing > 0 && (
+        <div className="notice">
+          <Info size={15} />
+          <span>
+            {history.missing} of {history.samples.length + history.missing} sampled blocks
+            returned nothing — either older than this protocol, or pruned by the node.
+          </span>
+        </div>
+      )}
 
-      <div className="grid-2">
+      <section className="grid grid-2">
         <div className="panel">
-          <h2 className="h2">Where the stake sits</h2>
-          <BarList
-            data={active.map((v) => ({
-              label: shortAddress(v.address),
-              value: Number(v.bonded),
-              display: `${((Number(v.bonded) / (totalBonded || 1)) * 100).toFixed(1)}%`,
-              note:
-                v.status === "draining"
-                  ? "draining"
-                  : `target ${(v.weight_bps / 100).toFixed(0)}%`,
-            }))}
-          />
-          <p className="note">
+          <h2 className="h2" style={{ marginBottom: "var(--s-4)" }}>
+            Where the stake sits
+          </h2>
+          {active.length === 0 ? (
+            <p className="hint">Loading the validator set…</p>
+          ) : (
+            <BarList
+              data={active.map((v) => ({
+                label: shortAddress(v.address),
+                value: bondedTotal > 0 ? Number(v.bonded) / bondedTotal : 0,
+                display: `${bondedTotal > 0 ? ((Number(v.bonded) / bondedTotal) * 100).toFixed(1) : "0.0"}%`,
+                note: `target ${(v.weight_bps / 100).toFixed(0)}%`,
+              }))}
+              max={1}
+            />
+          )}
+          <p className="hint" style={{ marginTop: "var(--s-4)" }}>
             No validator may exceed{" "}
-            {config ? `${config.limits.max_validator_weight_bps / 100}%` : "—"}, a ceiling
-            compiled into the contract rather than configured. The incumbent SCRT
-            derivative routes 64% to one operator.
+            {config ? config.limits.max_validator_weight_bps / 100 : 25}%, a ceiling
+            compiled into the contract rather than configured. The incumbent SCRT derivative
+            routes 64% to one operator.
           </p>
         </div>
 
-        <div>
+        <div className="stack" style={{ gap: "var(--s-4)" }}>
           <div className="panel">
-            <h2 className="h2">Withdrawal queue</h2>
-            <div className="row">
-              <span className="k">Queued for withdrawal</span>
-              <span className="v numeral">{fromMicro(queued, 2)} SCRT</span>
-            </div>
-            <div className="row">
-              <span className="k">Windows in flight</span>
-              <span className="v numeral">
-                {windows.filter((w) => w.state === "unbonding").length}
-              </span>
-            </div>
-            <div className="row">
-              <span className="k">Ready to claim</span>
-              <span className="v numeral">
-                {windows.filter((w) => w.state === "matured").length}
-              </span>
-            </div>
-            <div className="row">
-              <span className="k">Entry slots used</span>
-              <span className="v numeral">
-                {validators.reduce((n, v) => n + v.active_unbond_entries, 0)} /{" "}
-                {config
-                  ? active.length * config.params.max_unbond_entries_per_validator
-                  : "—"}
-              </span>
-            </div>
-            <p className="note">
+            <h2 className="h2" style={{ marginBottom: "var(--s-4)" }}>
+              Withdrawal queue
+            </h2>
+            <dl className="stack" style={{ gap: "var(--s-3)", margin: 0 }}>
+              <Row label="Queued for withdrawal" value={`${fromMicro(queued, 2)} SCRT`} />
+              <Row
+                label="Windows in flight"
+                value={String(windows.filter((w) => w.state === "unbonding").length)}
+              />
+              <Row
+                label="Ready to claim"
+                value={String(windows.filter((w) => w.state === "matured").length)}
+              />
+              <Row label="Entry slots used" value={`${slotsUsed} / ${slotCeiling}`} />
+            </dl>
+            <p className="hint" style={{ marginTop: "var(--s-4)" }}>
               Cosmos allows seven concurrent unbonding entries per validator and this
               protocol is a single delegator, which is why withdrawals are batched at all.
             </p>
           </div>
 
           <div className="panel">
-            <h2 className="h2">Protocol</h2>
-            <div className="row">
-              <span className="k">Performance fee</span>
-              <span className="v numeral">
-                {config ? `${config.params.performance_fee_bps / 100}%` : "—"}
-              </span>
-            </div>
-            <div className="row">
-              <span className="k">Rewards awaiting compound</span>
-              <span className="v numeral">
-                {state ? fromMicro(state.pending_rewards, 4) : "—"} SCRT
-              </span>
-            </div>
-            <div className="row">
-              <span className="k">Undeployed</span>
-              <span className="v numeral">
-                {state ? fromMicro(state.liquid_unallocated, 4) : "—"} SCRT
-              </span>
-            </div>
-            <div className="row">
-              <span className="k">Last synced</span>
-              <span className="v">{state ? whenFrom(state.last_sync_time) : "—"}</span>
-            </div>
-            <div className="row">
-              <span className="k">Deposits</span>
-              <span className="v">
-                {config?.paused ? (
-                  <span className="pill">paused</span>
-                ) : (
-                  <span className="pill pill--live">open</span>
-                )}
-              </span>
-            </div>
+            <h2 className="h2" style={{ marginBottom: "var(--s-4)" }}>
+              Protocol
+            </h2>
+            <dl className="stack" style={{ gap: "var(--s-3)", margin: 0 }}>
+              <Row
+                label="Performance fee"
+                value={config ? `${config.params.performance_fee_bps / 100}%` : "—"}
+              />
+              <Row
+                label="Rewards awaiting compound"
+                value={state ? `${fromMicro(state.pending_rewards)} SCRT` : "—"}
+              />
+              <Row
+                label="Undeployed"
+                value={state ? `${fromMicro(state.liquid_unallocated)} SCRT` : "—"}
+              />
+              <Row label="Last upkeep" value={state ? whenFrom(state.last_sync_time) : "—"} />
+              <Row
+                label="Deposits"
+                value={
+                  config?.paused ? (
+                    <span className="pill pill--warn">paused</span>
+                  ) : (
+                    <span className="pill pill--good">open</span>
+                  )
+                }
+              />
+            </dl>
+            {state?.is_unattended && (
+              <div className="notice" style={{ marginTop: "var(--s-4)" }}>
+                <Info size={15} />
+                <span>
+                  Nobody has run upkeep lately, so rewards are sitting uncompounded. This
+                  costs yield — deposits, withdrawals and claims are unaffected.
+                </span>
+              </div>
+            )}
           </div>
         </div>
-      </div>
-
-      {history && history.missing > 0 && (
-        <p className="note">
-          {history.missing} of {history.missing + history.samples.length} sampled blocks
-          returned nothing — either they predate the deployment, or the public node has
-          pruned that far back. The chart shows what the chain still holds rather than
-          filling the gap in.
-        </p>
-      )}
+      </section>
     </div>
   );
+}
+
+function Stat({
+  label,
+  value,
+  unit,
+  note,
+}: {
+  label: string;
+  value: string | null;
+  unit?: string;
+  note: string;
+}) {
+  return (
+    <div className="card card--flat stat">
+      <span className="stat-label">{label}</span>
+      <span className="stat-value num">
+        {value ?? <span className="skel" style={{ width: 90, height: 24 }} />}
+        {value && unit && <span className="stat-unit">{unit}</span>}
+      </span>
+      <span className="stat-note">{note}</span>
+    </div>
+  );
+}
+
+function Row({ label, value }: { label: string; value: React.ReactNode }) {
+  return (
+    <div className="row">
+      <dt>{label}</dt>
+      <dd className="num">{value}</dd>
+    </div>
+  );
+}
+
+const stamp = (seconds: number) =>
+  new Date(seconds * 1000).toLocaleString(undefined, {
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+
+/** Axis labels have no room for thousands separators at four figures and up. */
+function compact(value: number): string {
+  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}M`;
+  if (value >= 1_000) return `${(value / 1_000).toFixed(1)}k`;
+  return value.toFixed(0);
 }

@@ -1,17 +1,17 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useId, useMemo, useState } from "react";
 
 /**
  * Charts, drawn as plain SVG.
  *
- * No charting library: two forms are needed and both are a few lines of geometry, which
- * is smaller than any dependency and leaves nothing to fight when the design changes.
+ * No charting library: two forms are needed, both are a few lines of geometry, and that is
+ * smaller than any dependency while leaving nothing to fight when the design changes.
  *
- * Every series here is single-hue. A line chart with one series needs no legend — the
- * title names it — and the validator bars carry identity in their labels rather than in
- * colour, which is what lets the whole page use the brand's one accent without inventing
- * a categorical palette that would not survive a colourblindness check.
+ * Every series is single-hue. A line chart with one series needs no legend — the panel
+ * heading names it — and the validator bars carry identity in their labels rather than in
+ * colour, which is what lets the page use one accent without inventing a categorical
+ * palette that would then have to survive a colourblindness check.
  */
 
 export interface Point {
@@ -22,28 +22,28 @@ export interface Point {
 interface LineChartProps {
   points: Point[];
   height?: number;
-  /** Rendered into the tooltip and the y-axis labels. */
   formatY: (value: number) => string;
   formatX: (value: number) => string;
-  /** Start the y-axis at the data's own floor rather than zero. */
+  /** Start the y-axis at zero rather than at the data's own floor. */
   zeroBased?: boolean;
 }
 
 export function LineChart({
   points,
-  height = 200,
+  height = 190,
   formatY,
   formatX,
   zeroBased = false,
 }: LineChartProps) {
   const [hover, setHover] = useState<number | null>(null);
+  const gradientId = useId();
 
   const W = 1000;
   const H = height;
-  const PAD = { top: 12, right: 12, bottom: 22, left: 56 };
+  const PAD = { top: 14, right: 8, bottom: 24, left: 54 };
 
   const geometry = useMemo(() => {
-    if (points.length === 0) return null;
+    if (points.length < 2) return null;
 
     const ys = points.map((p) => p.y);
     const rawMin = Math.min(...ys);
@@ -51,27 +51,25 @@ export function LineChart({
 
     // A flat series would collapse to a zero-height band and divide by zero, so give it
     // room — but proportionally. An absolute pad put an exchange rate pinned at 1.0 on an
-    // axis running to 2.0, which reads as though it might double any moment.
+    // axis running to 2.0, which reads as though it might double at any moment.
     const flat = rawMax - rawMin < Math.abs(rawMax) * 1e-9;
-    const pad = flat ? Math.abs(rawMax) * 0.001 || 1 : 0;
+    const pad = flat ? Math.abs(rawMax) * 0.001 || 1 : (rawMax - rawMin) * 0.12;
     const min = zeroBased ? 0 : rawMin - pad;
     const max = rawMax + pad;
     const span = max - min || 1;
 
     const xs = points.map((p) => p.x);
     const xMin = Math.min(...xs);
-    const xMax = Math.max(...xs);
-    const xSpan = xMax - xMin || 1;
+    const xSpan = Math.max(...xs) - xMin || 1;
 
     const plotW = W - PAD.left - PAD.right;
     const plotH = H - PAD.top - PAD.bottom;
 
-    const at = (p: Point) => ({
+    const coords = points.map((p) => ({
       cx: PAD.left + ((p.x - xMin) / xSpan) * plotW,
       cy: PAD.top + plotH - ((p.y - min) / span) * plotH,
-    });
+    }));
 
-    const coords = points.map(at);
     const line = coords.map((c, i) => `${i === 0 ? "M" : "L"}${c.cx},${c.cy}`).join(" ");
     const area =
       `${line} L${coords[coords.length - 1]!.cx},${PAD.top + plotH} ` +
@@ -85,11 +83,11 @@ export function LineChart({
     return { coords, line, area, ticks, plotH };
   }, [points, H, zeroBased]);
 
-  if (!geometry || points.length < 2) {
+  if (!geometry) {
     return (
-      <p className="note" style={{ marginTop: 0 }}>
-        Not enough history yet — the chart fills in as the protocol accumulates blocks.
-      </p>
+      <div className="empty" style={{ padding: "var(--s-8) 0" }}>
+        <p className="hint">Not enough history yet — this fills in as the protocol runs.</p>
+      </div>
     );
   }
 
@@ -106,8 +104,7 @@ export function LineChart({
         onMouseLeave={() => setHover(null)}
         onMouseMove={(event) => {
           const box = event.currentTarget.getBoundingClientRect();
-          const ratio = (event.clientX - box.left) / box.width;
-          const x = ratio * W;
+          const x = ((event.clientX - box.left) / box.width) * W;
           // Nearest point wins, so the hit target is half the gap between points rather
           // than the mark itself.
           let best = 0;
@@ -122,16 +119,23 @@ export function LineChart({
           setHover(best);
         }}
       >
+        <defs>
+          <linearGradient id={gradientId} x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" className="chart-fill-from" />
+            <stop offset="100%" className="chart-fill-to" />
+          </linearGradient>
+        </defs>
+
         {geometry.ticks.map((tick) => (
           <g key={tick.value}>
             <line className="chart-grid" x1={PAD.left} x2={W - PAD.right} y1={tick.y} y2={tick.y} />
-            <text className="chart-axis" x={PAD.left - 8} y={tick.y + 4} textAnchor="end">
+            <text className="chart-axis" x={PAD.left - 10} y={tick.y + 4} textAnchor="end">
               {formatY(tick.value)}
             </text>
           </g>
         ))}
 
-        <path className="chart-area" d={geometry.area} />
+        <path d={geometry.area} fill={`url(#${gradientId})`} />
         <path className="chart-line" d={geometry.line} />
 
         {activeAt && (
@@ -160,9 +164,10 @@ export function LineChart({
           className="tooltip"
           style={{ left: `${(activeAt.cx / W) * 100}%`, top: `${(activeAt.cy / H) * 100}%` }}
         >
-          <strong className="numeral">{formatY(active.y)}</strong>
-          <br />
-          <span style={{ color: "var(--ink-quiet)" }}>{formatX(active.x)}</span>
+          <strong className="num">{formatY(active.y)}</strong>
+          <span className="faint" style={{ marginLeft: 8 }}>
+            {formatX(active.x)}
+          </span>
         </div>
       )}
     </div>
@@ -172,7 +177,6 @@ export function LineChart({
 export interface BarDatum {
   label: string;
   value: number;
-  /** Shown to the right of the bar. */
   display: string;
   note?: string;
 }
@@ -189,35 +193,25 @@ export function BarList({ data, max }: { data: BarDatum[]; max?: number }) {
   const ceiling = max ?? Math.max(...data.map((d) => d.value), 1);
 
   return (
-    <div>
+    <div className="stack" style={{ gap: "var(--s-4)" }}>
       {data.map((d) => (
-        <div key={d.label} style={{ marginBottom: 14 }}>
-          <div
-            style={{
-              display: "flex",
-              justifyContent: "space-between",
-              gap: 12,
-              fontSize: 14,
-              marginBottom: 6,
-            }}
-          >
-            <span title={d.label}>
+        <div key={d.label}>
+          <div className="row" style={{ marginBottom: 6, minHeight: 0 }}>
+            <span className="k num" title={d.label} style={{ fontSize: 13 }}>
               {d.label}
-              {d.note && <span style={{ color: "var(--ink-faint)" }}> · {d.note}</span>}
+              {d.note && <span className="faint"> · {d.note}</span>}
             </span>
-            <span className="numeral" style={{ fontWeight: 700 }}>
-              {d.display}
-            </span>
+            <span className="v num">{d.display}</span>
           </div>
-          <svg className="chart" viewBox="0 0 1000 8" height={8} preserveAspectRatio="none">
-            <rect className="chart-bar-track" x={0} y={0} width={1000} height={8} rx={4} />
+          <svg className="chart" viewBox="0 0 1000 6" height={6} preserveAspectRatio="none">
+            <rect className="chart-bar-track" x={0} y={0} width={1000} height={6} rx={3} />
             <rect
               className="chart-bar"
               x={0}
               y={0}
               width={Math.max(0, (d.value / ceiling) * 1000)}
-              height={8}
-              rx={4}
+              height={6}
+              rx={3}
             />
           </svg>
         </div>

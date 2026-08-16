@@ -8,6 +8,8 @@
 
 import { SecretNetworkClient, type Permit } from "secretjs";
 
+import { lcdUrl } from "./endpoint";
+
 export interface Deployment {
   chainId: string;
   lcdUrl: string;
@@ -89,7 +91,7 @@ export async function connect(): Promise<Connection> {
 
   const client = new SecretNetworkClient({
     chainId: DEPLOYMENT.chainId,
-    url: DEPLOYMENT.lcdUrl,
+    url: lcdUrl(),
     wallet: signer as never,
     walletAddress: account.address,
     encryptionUtils: k.getEnigmaUtils(DEPLOYMENT.chainId) as never,
@@ -102,7 +104,7 @@ export async function connect(): Promise<Connection> {
 export function readOnlyClient(): SecretNetworkClient {
   return new SecretNetworkClient({
     chainId: DEPLOYMENT.chainId,
-    url: DEPLOYMENT.lcdUrl,
+    url: lcdUrl(),
   });
 }
 

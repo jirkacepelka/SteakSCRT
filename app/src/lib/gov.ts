@@ -11,6 +11,7 @@
  */
 
 import { DEPLOYMENT } from "./chain";
+import { lcdUrl } from "./endpoint";
 
 /** The one proposal type that can reach a Secret contract. */
 const CONTRACT_GOV_MSG = "/secret.compute.v1beta1.MsgContractGovernanceProposal";
@@ -80,7 +81,7 @@ function shape(raw: RawProposal): Proposal {
  */
 export async function fetchProposals(): Promise<Proposal[]> {
   const res = await fetch(
-    `${DEPLOYMENT.lcdUrl}/cosmos/gov/v1/proposals?pagination.limit=200&pagination.reverse=true`,
+    `${lcdUrl()}/cosmos/gov/v1/proposals?pagination.limit=200&pagination.reverse=true`,
   );
   if (!res.ok) throw new Error(`Governance is not readable from this node (${res.status}).`);
 
@@ -93,7 +94,7 @@ export async function fetchProposals(): Promise<Proposal[]> {
 /** What a proposal must put up before it can be voted on, in uscrt. */
 export async function fetchMinDeposit(): Promise<string | null> {
   try {
-    const res = await fetch(`${DEPLOYMENT.lcdUrl}/cosmos/gov/v1/params/deposit`);
+    const res = await fetch(`${lcdUrl()}/cosmos/gov/v1/params/deposit`);
     if (!res.ok) return null;
     const body = (await res.json()) as {
       params?: { min_deposit?: { denom: string; amount: string }[] };

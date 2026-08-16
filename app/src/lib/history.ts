@@ -20,6 +20,7 @@ import { fromBase64, fromUtf8, toBase64 } from "@cosmjs/encoding";
 import { SecretNetworkClient } from "secretjs";
 
 import { DEPLOYMENT, readOnlyClient } from "./chain";
+import { lcdUrl } from "./endpoint";
 import type { ProtocolState } from "./protocol";
 
 export interface Sample {
@@ -51,7 +52,7 @@ const POINTS = 24;
 async function createdHeight(): Promise<number | null> {
   try {
     const res = await fetch(
-      `${DEPLOYMENT.lcdUrl}/compute/v1beta1/info/${DEPLOYMENT.core.address}`,
+      `${lcdUrl()}/compute/v1beta1/info/${DEPLOYMENT.core.address}`,
     );
     if (!res.ok) return null;
     const body = await res.json();
@@ -63,7 +64,7 @@ async function createdHeight(): Promise<number | null> {
 }
 
 async function latestHeight(): Promise<{ height: number; time: number }> {
-  const res = await fetch(`${DEPLOYMENT.lcdUrl}/cosmos/base/tendermint/v1beta1/blocks/latest`);
+  const res = await fetch(`${lcdUrl()}/cosmos/base/tendermint/v1beta1/blocks/latest`);
   const body = await res.json();
   return {
     height: Number(body.block.header.height),
@@ -83,7 +84,7 @@ async function blockSeconds(latest: { height: number; time: number }): Promise<n
   if (back <= 0) return 6;
 
   const res = await fetch(
-    `${DEPLOYMENT.lcdUrl}/cosmos/base/tendermint/v1beta1/blocks/${latest.height - back}`,
+    `${lcdUrl()}/cosmos/base/tendermint/v1beta1/blocks/${latest.height - back}`,
   );
   if (!res.ok) return 6;
 
@@ -106,19 +107,72 @@ interface EncryptionUtils {
   decrypt(ciphertext: Uint8Array, nonce: Uint8Array): Promise<Uint8Array>;
 }
 
+/**
+ * Which code the contract was running at a given height.
+ *
+ * A query is encrypted against the contract's code hash, and a migration changes it — so
+ * reading history with today's hash silently returns nothing for every block before the
+ * last upgrade, and the chart quietly loses its past every time the protocol is improved.
+ * The chain keeps the record, so use it.
+ */
+async function codeHashAt(): Promise<(height: number) => string> {
+  const fallback = () => DEPLOYMENT.core.codeHash;
+  try {
+    const res = await fetch(
+      `${lcdUrl()}/compute/v1beta1/contract_history/${DEPLOYMENT.core.address}`,
+    );
+    if (!res.ok) return fallback;
+
+    const body = (await res.json()) as {
+      entries?: { code_id?: string; updated?: { block_height?: string } }[];
+    };
+    const entries = (body.entries ?? [])
+      .map((e) => ({
+        codeId: e.code_id ?? "",
+        height: Number(e.updated?.block_height ?? 0),
+      }))
+      .filter((e) => e.codeId)
+      .sort((a, b) => a.height - b.height);
+
+    if (entries.length === 0) return fallback;
+
+    const hashes = new Map<string, string>();
+    await Promise.all(
+      [...new Set(entries.map((e) => e.codeId))].map(async (codeId) => {
+        const r = await fetch(`${lcdUrl()}/compute/v1beta1/code_hash/by_code_id/${codeId}`);
+        if (!r.ok) return;
+        const { code_hash: hash } = (await r.json()) as { code_hash?: string };
+        if (hash) hashes.set(codeId, hash);
+      }),
+    );
+
+    return (height: number) => {
+      // The last change at or below this height is the code that was running in it.
+      let chosen = entries[0]!;
+      for (const entry of entries) {
+        if (entry.height <= height) chosen = entry;
+      }
+      return hashes.get(chosen.codeId) ?? DEPLOYMENT.core.codeHash;
+    };
+  } catch {
+    return fallback;
+  }
+}
+
 /** Query the core contract at a specific height, or null if it has nothing to say there. */
 async function stateAt(
   client: SecretNetworkClient,
   height: number | null,
+  codeHash: string,
 ): Promise<ProtocolState | null> {
   try {
     const utils = (client as unknown as { encryptionUtils: EncryptionUtils })
       .encryptionUtils;
-    const encrypted = await utils.encrypt(DEPLOYMENT.core.codeHash, { state: {} });
+    const encrypted = await utils.encrypt(codeHash, { state: {} });
     const nonce = encrypted.slice(0, 32);
 
     const url =
-      `${DEPLOYMENT.lcdUrl}/compute/v1beta1/query/${DEPLOYMENT.core.address}` +
+      `${lcdUrl()}/compute/v1beta1/query/${DEPLOYMENT.core.address}` +
       `?query=${encodeURIComponent(toBase64(encrypted))}`;
 
     const res = await fetch(url, {
@@ -170,9 +224,11 @@ export async function fetchHistory(range: Range): Promise<History> {
 
   const unique = [...new Set(heights)];
 
+  const hashFor = await codeHashAt();
+
   const results = await pooled(unique, 6, async (height) => {
     const isLatest = height >= latest.height;
-    const state = await stateAt(client, isLatest ? null : height);
+    const state = await stateAt(client, isLatest ? null : height, hashFor(height));
     if (!state) return null;
     return {
       height,

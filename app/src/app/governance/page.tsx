@@ -2,7 +2,8 @@
 
 import { useEffect, useMemo, useState } from "react";
 
-import { Status, readable, type Feedback } from "@/components/Status";
+import { Alert, Check, ChevronDown, Copy, Info, Spinner } from "@/components/Icon";
+import { readable, useToast } from "@/components/Toast";
 import { Unconfigured } from "@/components/Unconfigured";
 import { useWallet } from "@/components/Wallet";
 import { CONFIGURED, DEPLOYMENT, fromMicro, shortAddress, toMicro, untilFrom } from "@/lib/chain";
@@ -18,11 +19,11 @@ import {
   type ValidatorEntry,
 } from "@/lib/protocol";
 
-type Audience = "onchain" | "governor";
+type Tab = "onchain" | "governor";
 
 export default function GovernancePage() {
   const { connection, address } = useWallet();
-  const [audience, setAudience] = useState<Audience>("onchain");
+  const [tab, setTab] = useState<Tab>("onchain");
   const [config, setConfig] = useState<Config | null>(null);
   const [validators, setValidators] = useState<ValidatorEntry[]>([]);
 
@@ -42,20 +43,37 @@ export default function GovernancePage() {
   const isManager = Boolean(config && address && config.manager === address);
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
-      <div className="segmented segmented--narrow">
-        <button aria-pressed={audience === "onchain"} onClick={() => setAudience("onchain")}>
-          Onchain
-        </button>
-        <button aria-pressed={audience === "governor"} onClick={() => setAudience("governor")}>
-          Governor
-        </button>
-      </div>
+    <div className="stack" style={{ gap: "var(--s-6)" }}>
+      <header
+        style={{
+          display: "flex",
+          alignItems: "flex-end",
+          justifyContent: "space-between",
+          gap: "var(--s-4)",
+          flexWrap: "wrap",
+        }}
+      >
+        <div>
+          <h1 className="h1">Governance</h1>
+          <p className="prose" style={{ marginTop: 6, maxWidth: "60ch" }}>
+            The network decides what code this protocol runs. A manager tunes the fee and
+            the split between validators, within ceilings the code puts beyond their reach.
+          </p>
+        </div>
+        <div className="segmented">
+          <button aria-pressed={tab === "onchain"} onClick={() => setTab("onchain")}>
+            Proposals
+          </button>
+          <button aria-pressed={tab === "governor"} onClick={() => setTab("governor")}>
+            Manager
+          </button>
+        </div>
+      </header>
 
-      {audience === "onchain" ? (
-        <NetworkProposals config={config} />
+      {tab === "onchain" ? (
+        <Proposals config={config} />
       ) : (
-        <ManagerConsole
+        <Manager
           config={config}
           validators={validators}
           isManager={isManager}
@@ -67,22 +85,18 @@ export default function GovernancePage() {
   );
 }
 
-/* ------------------------------------------------------------------ network */
+/* ---------------------------------------------------------------- proposals */
 
-function NetworkProposals({ config }: { config: Config | null }) {
+function Proposals({ config }: { config: Config | null }) {
   const [proposals, setProposals] = useState<Proposal[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [composing, setComposing] = useState(false);
 
   useEffect(() => {
-    void (async () => {
-      try {
-        setProposals(await fetchProposals());
-      } catch (e) {
-        setError(readable(e));
-      }
-    })();
+    void fetchProposals()
+      .then(setProposals)
+      .catch((e) => setError(readable(e)));
   }, []);
 
   const visible = useMemo(() => {
@@ -99,47 +113,51 @@ function NetworkProposals({ config }: { config: Config | null }) {
 
   return (
     <>
-      <div className="row">
-        <h1 className="h1">Governance</h1>
-        <button className="btn btn--white" onClick={() => setComposing(true)}>
-          + Make proposal
+      <div style={{ display: "flex", gap: "var(--s-3)", flexWrap: "wrap" }}>
+        <input
+          className="input"
+          style={{ maxWidth: 280 }}
+          placeholder="Search proposals"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+        />
+        <button className="btn btn--sm" onClick={() => setComposing(true)}>
+          Draft a proposal
         </button>
       </div>
 
-      <input
-        className="search"
-        placeholder="Search protocol voting"
-        value={query}
-        onChange={(e) => setQuery(e.target.value)}
-      />
-
       {error ? (
-        <div className="panel">
-          <p className="h2">Governance is not readable</p>
-          <p className="note">{error}</p>
+        <div className="notice notice--bad">
+          <Alert size={15} />
+          <span>{error}</span>
         </div>
       ) : proposals === null ? (
-        <div className="panel">
-          <p className="note">Loading proposals…</p>
+        <div className="panel empty">
+          <Spinner />
+          <p className="hint">Reading governance…</p>
         </div>
       ) : visible.length === 0 ? (
-        <div className="panel">
-          <p className="h2">{query ? "Nothing matches" : "No proposals about this protocol"}</p>
-          <p className="note">
+        <div className="panel empty">
+          <h2 className="h2">{query ? "Nothing matches" : "No proposals about this protocol"}</h2>
+          <p className="prose" style={{ maxWidth: "52ch" }}>
             {query
               ? "No proposal matches that search."
-              : `This list shows only proposals that would migrate ${shortAddress(
+              : `Only proposals that would migrate ${shortAddress(
                   DEPLOYMENT.core.address,
                 )} or ${shortAddress(
                   DEPLOYMENT.token.address,
-                )}. Chain-wide votes are the network's business and are not repeated here.`}
+                )} appear here. Chain-wide votes are the network's business and are not repeated.`}
           </p>
         </div>
       ) : (
-        visible.map((p) => <ProposalCard key={p.id} proposal={p} />)
+        <div className="stack" style={{ gap: "var(--s-3)" }}>
+          {visible.map((p) => (
+            <ProposalCard key={p.id} proposal={p} />
+          ))}
+        </div>
       )}
 
-      {composing && <ProposalComposer config={config} onClose={() => setComposing(false)} />}
+      {composing && <Composer config={config} onClose={() => setComposing(false)} />}
     </>
   );
 }
@@ -147,52 +165,60 @@ function NetworkProposals({ config }: { config: Config | null }) {
 function ProposalCard({ proposal }: { proposal: Proposal }) {
   const [open, setOpen] = useState(false);
 
-  const timing =
-    proposal.votingEnd === null
-      ? statusLabel(proposal.status)
-      : proposal.votingEnd * 1000 > Date.now()
-        ? `Ends in ${untilFrom(proposal.votingEnd)}`
-        : statusLabel(proposal.status);
+  const live = proposal.votingEnd !== null && proposal.votingEnd * 1000 > Date.now();
+  const timing = live ? `Ends in ${untilFrom(proposal.votingEnd!)}` : statusLabel(proposal.status);
 
   return (
-    <div className="panel--solid" style={{ display: "flex", flexDirection: "column", gap: 20 }}>
-      <div className="row">
-        <span className="h3">{proposal.title}</span>
-        <span style={{ fontSize: 18, color: "var(--ink-quiet)", whiteSpace: "nowrap" }}>
-          {timing}
-        </span>
+    <div className="card card--flat" style={{ padding: "var(--s-5)" }}>
+      <div className="row" style={{ alignItems: "flex-start" }}>
+        <div style={{ minWidth: 0 }}>
+          <h2 className="h2">{proposal.title}</h2>
+          <p className="hint" style={{ marginTop: 4 }}>
+            Proposal #{proposal.id}
+          </p>
+        </div>
+        <span className={`pill ${live ? "pill--accent" : ""}`}>{timing}</span>
       </div>
 
-      <div>
-        <button className="btn btn--pill" onClick={() => setOpen((v) => !v)}>
-          {open ? "Close ←" : "Explore →"}
-        </button>
-      </div>
+      <button
+        className="btn btn--ghost btn--sm"
+        style={{ marginTop: "var(--s-4)" }}
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+      >
+        {open ? "Hide detail" : "What it would do"}
+        <ChevronDown
+          size={14}
+          className={open ? "spin-none" : undefined}
+        />
+      </button>
 
       {open && (
-        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-          <div className="row">
-            <span className="k">Proposal</span>
-            <span className="v numeral">#{proposal.id}</span>
-          </div>
-          <div className="row">
-            <span className="k">Status</span>
-            <span className="v">{statusLabel(proposal.status)}</span>
-          </div>
-          {proposal.changes.map((c) => (
-            <div className="row" key={`${c.address}-${c.newCodeId}`}>
-              <span className="k">
-                {c.ours ? "Migrates" : "Also migrates"} {shortAddress(c.address)}
-              </span>
-              <span className="v numeral">code id {c.newCodeId}</span>
+        <div className="well" style={{ marginTop: "var(--s-4)" }}>
+          <dl className="stack" style={{ gap: "var(--s-3)", margin: 0 }}>
+            <div className="row">
+              <dt>Status</dt>
+              <dd>{statusLabel(proposal.status)}</dd>
             </div>
-          ))}
-          {proposal.summary && <p className="note">{proposal.summary}</p>}
-          <p className="note">
-            The detail is rendered from the proposal itself rather than linked to an
-            explorer, so what you read here is what the chain would execute. Before voting,
-            check that the code id was built from a tagged commit: the whole point of
-            approving a version is that voters could have reproduced it.
+            {proposal.changes.map((c) => (
+              <div className="row" key={`${c.address}-${c.newCodeId}`}>
+                <dt>
+                  {c.ours ? "Migrates" : "Also migrates"} {shortAddress(c.address)}
+                </dt>
+                <dd className="num">code id {c.newCodeId}</dd>
+              </div>
+            ))}
+          </dl>
+          {proposal.summary && (
+            <p className="prose" style={{ marginTop: "var(--s-4)" }}>
+              {proposal.summary}
+            </p>
+          )}
+          <p className="hint" style={{ marginTop: "var(--s-4)" }}>
+            Rendered from the proposal itself rather than linked to an explorer, so what you
+            read is what the chain would execute. Before voting, check the code id was built
+            from a tagged commit — the point of approving a version is that voters could
+            have reproduced it.
           </p>
         </div>
       )}
@@ -201,31 +227,32 @@ function ProposalCard({ proposal }: { proposal: Proposal }) {
 }
 
 /**
- * Compose the one proposal type that can reach this protocol.
+ * Draft the one proposal type that can reach this protocol.
  *
- * Chain governance cannot call a Secret contract — the compute module authenticates every
- * message against the signature of the transaction carrying it, and a proposal executes in
- * EndBlocker where there is none. What it *can* do is approve a code version, because
- * `MsgContractGovernanceProposal` carries only an address and a code id, with nothing
- * encrypted to bind to a signature.
+ * Chain governance cannot call a Secret contract: the compute module authenticates every
+ * message against the signature of the transaction carrying it, and a proposal executes
+ * with no transaction. Approving a code version works because that message carries only an
+ * address and a code id, with nothing encrypted needing a signature.
  *
- * The design left the payload field open with a note asking what belongs there. The answer
- * is a code id, not source: a proposal cannot carry a binary, so the reviewed wasm is
- * uploaded first with `secretd tx compute store` and the vote approves the number that
- * returns.
+ * A proposal also cannot carry a binary, so the field is a code id from a prior
+ * `compute store`. The app builds the file and hands over the command rather than signing:
+ * submitting locks a large deposit, and a wallet route for a message type this app cannot
+ * test against a real vote is not worth that risk to the user.
  */
-function ProposalComposer({ config, onClose }: { config: Config | null; onClose: () => void }) {
+function Composer({ config, onClose }: { config: Config | null; onClose: () => void }) {
   const [target, setTarget] = useState<"core" | "token">("core");
-  const [title, setTitle] = useState("Upgrade protocol");
+  const [title, setTitle] = useState("Upgrade the staking contract");
   const [codeId, setCodeId] = useState("");
-  const [description, setDescription] = useState("");
+  const [summary, setSummary] = useState("");
   const [deposit, setDeposit] = useState<string | null>(null);
-  const [built, setBuilt] = useState(false);
   const [copied, setCopied] = useState(false);
 
   useEffect(() => {
     void fetchMinDeposit().then(setDeposit);
-  }, []);
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
 
   const contract = target === "core" ? DEPLOYMENT.core.address : DEPLOYMENT.token.address;
 
@@ -236,10 +263,9 @@ function ProposalComposer({ config, onClose }: { config: Config | null; onClose:
           messages: [
             {
               "@type": "/secret.compute.v1beta1.MsgContractGovernanceProposal",
-              // secretd substitutes the gov module account when the proposal is submitted.
               authority: "<gov module account>",
               title,
-              description: description || title,
+              description: summary || title,
               contracts: [{ address: contract, new_code_id: codeId || "<code id>" }],
               admin_updates: [],
             },
@@ -247,138 +273,120 @@ function ProposalComposer({ config, onClose }: { config: Config | null; onClose:
           metadata: "",
           deposit: `${deposit ?? "1000000000"}uscrt`,
           title,
-          summary: description || title,
+          summary: summary || title,
         },
         null,
         2,
       ),
-    [title, description, contract, codeId, deposit],
+    [title, summary, contract, codeId, deposit],
   );
 
   return (
-    <div className="scrim" role="dialog" aria-modal="true" onClick={onClose}>
-      <div className="modal" onClick={(e) => e.stopPropagation()}>
-        <div className="modal-head">
-          <span className="h3">Make proposal</span>
-          <button className="modal-close" onClick={onClose} aria-label="Close">
-            ✕
-          </button>
+    <div className="scrim" onClick={onClose}>
+      <div
+        className="dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-label="Draft a proposal"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="dialog-head">
+          <h2 className="h2">Draft a proposal</h2>
+          <span className="pill">{deposit ? `${fromMicro(deposit, 0)} SCRT deposit` : "—"}</span>
         </div>
 
-        {!built ? (
-          <>
-            <div style={{ display: "flex", gap: 10 }}>
-              <label className="field" style={{ flex: 1 }}>
-                <span>Proposal name</span>
-                <input value={title} onChange={(e) => setTitle(e.target.value)} />
-              </label>
+        <div className="dialog-body">
+          <div className="field">
+            <label htmlFor="title">Title</label>
+            <input id="title" value={title} onChange={(e) => setTitle(e.target.value)} />
+          </div>
 
-              <label className="field" style={{ flex: 1 }}>
-                <span>Effect</span>
-                <select
-                  value={target}
-                  onChange={(e) => setTarget(e.target.value as "core" | "token")}
-                >
-                  <option value="core">Upgrade lst-core</option>
-                  <option value="token">Upgrade dSCRT token</option>
-                </select>
-              </label>
-            </div>
+          <div className="field">
+            <label htmlFor="target">Contract</label>
+            <select
+              id="target"
+              value={target}
+              onChange={(e) => setTarget(e.target.value as "core" | "token")}
+            >
+              <option value="core">Staking contract</option>
+              <option value="token">dSCRT token</option>
+            </select>
+          </div>
 
-            <label className="field">
-              <span>New code id — the reviewed wasm, uploaded before the vote</span>
-              <input
-                inputMode="numeric"
-                placeholder="e.g. 42"
-                value={codeId}
-                onChange={(e) => setCodeId(e.target.value.replace(/\D/g, ""))}
-              />
-            </label>
+          <div className="field">
+            <label htmlFor="codeid">New code id</label>
+            <input
+              id="codeid"
+              inputMode="numeric"
+              placeholder="e.g. 42"
+              value={codeId}
+              onChange={(e) => setCodeId(e.target.value.replace(/\D/g, ""))}
+            />
+            <span className="hint">
+              A proposal cannot carry code. Upload the reviewed binary first with{" "}
+              <code>secretd tx compute store</code> and put the id it returns here. Voters
+              should be able to rebuild that exact binary from a tagged commit.
+            </span>
+          </div>
 
-            <p className="note">
-              A proposal cannot carry code. Upload the binary first with{" "}
-              <code>secretd tx compute store</code> and put the code id it returns here —
-              voters approve a version, and should be able to rebuild that exact binary from
-              a tagged commit with <code>npm run build</code>.
-            </p>
+          <div className="field">
+            <label htmlFor="summary">Summary</label>
+            <textarea
+              id="summary"
+              placeholder="What changes, and why the network should accept it."
+              value={summary}
+              onChange={(e) => setSummary(e.target.value)}
+            />
+          </div>
 
-            <label className="field">
-              <span>Description</span>
-              <textarea
-                placeholder="What changes, and why the network should accept it."
-                value={description}
-                onChange={(e) => setDescription(e.target.value)}
-              />
-            </label>
+          <pre className="payload">{json}</pre>
 
-            <div className="row">
-              <span className="k">Governance deposit</span>
-              <span className="v numeral">
-                {deposit ? `${fromMicro(deposit, 0)} SCRT` : "—"}
-              </span>
-            </div>
-
-            <button className="btn btn--md" disabled={!codeId} onClick={() => setBuilt(true)}>
-              Propose
-            </button>
-          </>
-        ) : (
-          <>
-            <pre className="payload">{json}</pre>
-
+          <div style={{ display: "flex", gap: "var(--s-2)" }}>
             <button
-              className="btn btn--md"
+              className="btn btn--block"
+              disabled={!codeId}
               onClick={() => {
                 void navigator.clipboard.writeText(json);
                 setCopied(true);
                 setTimeout(() => setCopied(false), 2000);
               }}
             >
+              {copied ? <Check size={15} /> : <Copy size={15} />}
               {copied ? "Copied" : "Copy proposal"}
             </button>
-
-            <p className="note">
-              Save as <code>proposal.json</code> and submit it yourself:
-              <br />
-              <code>secretd tx gov submit-proposal proposal.json --from you</code>
-            </p>
-            <p className="note">
-              The app builds the file but does not sign it. Submitting locks up a{" "}
-              {deposit ? fromMicro(deposit, 0) : "—"} SCRT deposit, and a wallet route for a
-              message type this app cannot test against a real vote is not worth that risk
-              to you.
-            </p>
-
-            <button className="btn btn--md btn--ghost" onClick={() => setBuilt(false)}>
-              Back
+            <button className="btn btn--ghost" onClick={onClose}>
+              Close
             </button>
-          </>
-        )}
+          </div>
 
-        {config && (
-          <p className="note">
-            A passing vote is also how everything outside the manager&apos;s remit changes —
-            parameters, the validator allowlist, the treasury, and who the manager is. The
-            migration is relayed afterwards and can only execute the version that was
-            approved.
+          <p className="hint">
+            Save as <code>proposal.json</code> and submit it yourself with{" "}
+            <code>secretd tx gov submit-proposal</code>. The app builds the file but does not
+            sign it.
           </p>
-        )}
+
+          {config && (
+            <p className="hint">
+              A passing vote is also how everything outside the manager&apos;s remit changes:
+              parameters, the validator allowlist, the treasury, and who the manager is.
+            </p>
+          )}
+        </div>
       </div>
     </div>
   );
 }
 
-/* ------------------------------------------------------------------ manager */
+/* ---------------------------------------------------------------- manager */
 
 /**
  * The manager's console.
  *
- * Everything reachable from here is bounded by ceilings compiled into the contract, so the
- * screen enforces the same bounds up front rather than letting the chain reject the
- * transaction. A manager should be able to see that they cannot overreach, not discover it
- * from a failed transaction.
+ * Everything here is bounded by ceilings compiled into the contract, so the screen enforces
+ * the same bounds up front rather than letting the chain reject the transaction. A manager
+ * should be able to see that they cannot overreach, not discover it from a failure.
  */
-function ManagerConsole({
+function Manager({
   config,
   validators,
   isManager,
@@ -391,7 +399,8 @@ function ManagerConsole({
   connection: ReturnType<typeof useWallet>["connection"];
   onDone: () => Promise<void>;
 }) {
-  const [feedback, setFeedback] = useState<Feedback>({ kind: "idle" });
+  const toast = useToast();
+  const [busy, setBusy] = useState(false);
   const [fee, setFee] = useState("");
   const [weights, setWeightsState] = useState<Record<string, string>>({});
   const [plan, setPlan] = useState({ src: "", dst: "", amount: "" });
@@ -414,80 +423,99 @@ function ManagerConsole({
     [weights],
   );
 
-  const weightCeiling = config?.limits.max_validator_weight_bps ?? 0;
-  const overCeiling = Object.entries(weights).filter(
-    ([, pct]) => (Number(pct) || 0) * 100 > weightCeiling,
-  );
-  const weightsValid = Math.round(weightSum) === 10_000 && overCeiling.length === 0;
+  const ceiling = config?.limits.max_validator_weight_bps ?? 0;
+  const over = Object.entries(weights).filter(([, pct]) => (Number(pct) || 0) * 100 > ceiling);
+  const weightsValid = Math.round(weightSum) === 10_000 && over.length === 0;
 
-  const run = async (label: string, action: () => Promise<unknown>) => {
+  const run = async (message: string, action: () => Promise<unknown>) => {
     if (!connection) return;
-    setFeedback({ kind: "busy", message: "Waiting for your wallet…" });
+    const id = toast.show("pending", "Confirm in your wallet…");
+    setBusy(true);
     try {
       await action();
-      setFeedback({ kind: "ok", message: label });
+      toast.resolve(id, "ok", message);
       await onDone();
     } catch (e) {
-      setFeedback({ kind: "err", message: readable(e) });
+      toast.resolve(id, "error", readable(e));
+    } finally {
+      setBusy(false);
     }
   };
 
-  if (!config) return <div className="panel">Loading…</div>;
+  if (!config) {
+    return (
+      <div className="panel empty">
+        <Spinner />
+      </div>
+    );
+  }
 
   const locked = !connection || !isManager;
 
   return (
-    <div className="grid-2">
-      <div>
+    <div className="stack" style={{ gap: "var(--s-4)" }}>
+      <div className={`notice ${isManager ? "notice--good" : ""}`}>
+        {isManager ? <Check size={15} /> : <Info size={15} />}
+        <span>
+          {!connection
+            ? "Connect the manager wallet to make changes. Everything below is read-only until then."
+            : isManager
+              ? "This wallet is the manager. Nothing on this screen can move a user's funds."
+              : `Read-only — the manager is ${shortAddress(config.manager)}. Changing who that is takes a governance-approved code version.`}
+        </span>
+      </div>
+
+      <div className="grid grid-2">
         <div className="panel">
-          <p className="h2">Validator distribution</p>
+          <h2 className="h2" style={{ marginBottom: "var(--s-4)" }}>
+            Validator weights
+          </h2>
 
           <table className="plain">
             <thead>
               <tr>
                 <th>Validator</th>
                 <th>Bonded</th>
-                <th style={{ width: 110 }}>Weight %</th>
+                <th style={{ width: 96 }}>Target</th>
               </tr>
             </thead>
             <tbody>
               {config.validator_allowlist.map((address) => {
                 const entry = validators.find((v) => v.address === address);
                 const pct = weights[address] ?? "0";
-                const over = (Number(pct) || 0) * 100 > weightCeiling;
+                const tooHigh = (Number(pct) || 0) * 100 > ceiling;
                 return (
                   <tr key={address}>
                     <td>
-                      <span title={address}>{shortAddress(address)}</span>
+                      <span className="num" title={address}>
+                        {shortAddress(address)}
+                      </span>
                       {entry?.status === "draining" && (
-                        <>
-                          {" "}
-                          <span className="pill">draining</span>
-                        </>
+                        <span className="pill" style={{ marginLeft: 6 }}>
+                          draining
+                        </span>
                       )}
                     </td>
-                    <td className="numeral muted">{entry ? fromMicro(entry.bonded, 0) : "0"}</td>
+                    <td className="num faint">{entry ? fromMicro(entry.bonded, 0) : "0"}</td>
                     <td>
                       <input
+                        className="input"
                         inputMode="decimal"
+                        aria-label={`Target weight for ${address}`}
                         value={pct}
                         disabled={locked}
+                        style={{
+                          padding: "6px 8px",
+                          textAlign: "right",
+                          borderColor: tooHigh ? "var(--bad)" : undefined,
+                          color: tooHigh ? "var(--bad)" : undefined,
+                        }}
                         onChange={(e) =>
                           setWeightsState((w) => ({
                             ...w,
                             [address]: e.target.value.replace(/[^\d.]/g, ""),
                           }))
                         }
-                        style={{
-                          width: "100%",
-                          padding: "7px 10px",
-                          borderRadius: "var(--r-md)",
-                          border: 0,
-                          background: "var(--surface-2)",
-                          color: over ? "var(--bad)" : "var(--ink)",
-                          font: "inherit",
-                          fontVariantNumeric: "tabular-nums",
-                        }}
                       />
                     </td>
                   </tr>
@@ -496,28 +524,31 @@ function ManagerConsole({
             </tbody>
           </table>
 
-          <div className="row" style={{ marginTop: 12 }}>
+          <div className="row" style={{ marginTop: "var(--s-4)" }}>
             <span className="k">Total</span>
             <span
-              className="v numeral"
+              className="v num"
               style={{ color: Math.round(weightSum) === 10_000 ? undefined : "var(--bad)" }}
             >
-              {(weightSum / 100).toFixed(2)}% / 100.00%
+              {(weightSum / 100).toFixed(2)}% / 100%
             </span>
           </div>
 
-          {overCeiling.length > 0 && (
-            <p className="note" style={{ color: "var(--bad)", marginTop: 10 }}>
-              {overCeiling.length} validator{overCeiling.length === 1 ? "" : "s"} above the{" "}
-              {weightCeiling / 100}% ceiling. The ceiling is compiled into the contract:
-              raising it needs a governance-approved code version, not a setting.
-            </p>
+          {over.length > 0 && (
+            <div className="notice notice--bad" style={{ marginTop: "var(--s-3)" }}>
+              <Alert size={15} />
+              <span>
+                {over.length} validator{over.length === 1 ? "" : "s"} above the{" "}
+                {ceiling / 100}% ceiling. That ceiling is compiled into the contract: raising
+                it needs a governance-approved code version, not a setting.
+              </span>
+            </div>
           )}
 
           <button
-            className="btn btn--md"
-            style={{ marginTop: 16 }}
-            disabled={locked || !weightsValid}
+            className="btn btn--block"
+            style={{ marginTop: "var(--s-4)" }}
+            disabled={locked || !weightsValid || busy}
             onClick={() =>
               run("Weights updated.", () =>
                 setWeights(
@@ -534,147 +565,140 @@ function ManagerConsole({
           </button>
         </div>
 
-        <div className="panel">
-          <p className="h2">Rebalance</p>
-          <p className="note" style={{ marginBottom: 16 }}>
-            Moves stake that is already delegated. New deposits drift toward the target
-            weights on their own, so this is for correcting a set that has already gone out
-            of shape.
-          </p>
-
-          <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-            <label className="field">
-              <span>From</span>
-              <select
-                value={plan.src}
+        <div className="stack" style={{ gap: "var(--s-4)" }}>
+          <div className="panel">
+            <h2 className="h2">Performance fee</h2>
+            <p className="hint" style={{ margin: "6px 0 var(--s-4)" }}>
+              Taken from staking rewards, never from principal. The network capped this at{" "}
+              {config.limits.max_performance_fee_bps / 100}%.
+            </p>
+            <div style={{ display: "flex", gap: "var(--s-2)" }}>
+              <input
+                className="input"
+                inputMode="decimal"
+                aria-label="Performance fee percentage"
+                value={fee}
                 disabled={locked}
-                onChange={(e) => setPlan((p) => ({ ...p, src: e.target.value }))}
+                onChange={(e) => setFee(e.target.value.replace(/[^\d.]/g, ""))}
+              />
+              <button
+                className="btn btn--quiet btn--sm"
+                disabled={
+                  locked ||
+                  busy ||
+                  (Number(fee) || 0) * 100 > config.limits.max_performance_fee_bps
+                }
+                onClick={() =>
+                  run("Fee updated.", () =>
+                    setPerformanceFee(connection!, Math.round((Number(fee) || 0) * 100)),
+                  )
+                }
               >
-                <option value="">Select a validator</option>
-                {validators
-                  .filter((v) => v.bonded !== "0")
-                  .map((v) => (
-                    <option key={v.address} value={v.address}>
-                      {shortAddress(v.address)} — {fromMicro(v.bonded, 0)} SCRT
+                Set
+              </button>
+            </div>
+          </div>
+
+          <div className="panel">
+            <h2 className="h2">Rebalance</h2>
+            <p className="hint" style={{ margin: "6px 0 var(--s-4)" }}>
+              Moves stake already delegated. New deposits drift toward the targets on their
+              own, so this is for a set that has gone out of shape.
+            </p>
+            <div className="stack" style={{ gap: "var(--s-3)" }}>
+              <div className="field">
+                <label htmlFor="src">From</label>
+                <select
+                  id="src"
+                  value={plan.src}
+                  disabled={locked}
+                  onChange={(e) => setPlan((p) => ({ ...p, src: e.target.value }))}
+                >
+                  <option value="">Select a validator</option>
+                  {validators
+                    .filter((v) => v.bonded !== "0")
+                    .map((v) => (
+                      <option key={v.address} value={v.address}>
+                        {shortAddress(v.address)} — {fromMicro(v.bonded, 0)} SCRT
+                      </option>
+                    ))}
+                </select>
+              </div>
+              <div className="field">
+                <label htmlFor="dst">To</label>
+                <select
+                  id="dst"
+                  value={plan.dst}
+                  disabled={locked}
+                  onChange={(e) => setPlan((p) => ({ ...p, dst: e.target.value }))}
+                >
+                  <option value="">Select a validator</option>
+                  {config.validator_allowlist.map((address) => (
+                    <option key={address} value={address}>
+                      {shortAddress(address)}
                     </option>
                   ))}
-              </select>
-            </label>
-
-            <label className="field">
-              <span>To</span>
-              <select
-                value={plan.dst}
-                disabled={locked}
-                onChange={(e) => setPlan((p) => ({ ...p, dst: e.target.value }))}
-              >
-                <option value="">Select a validator</option>
-                {config.validator_allowlist.map((address) => (
-                  <option key={address} value={address}>
-                    {shortAddress(address)}
-                  </option>
-                ))}
-              </select>
-            </label>
-
-            <label className="field">
-              <span>Amount (SCRT)</span>
-              <input
-                inputMode="decimal"
-                value={plan.amount}
-                disabled={locked}
-                onChange={(e) =>
-                  setPlan((p) => ({ ...p, amount: e.target.value.replace(/[^\d.]/g, "") }))
+                </select>
+              </div>
+              <div className="field">
+                <label htmlFor="amt">Amount (SCRT)</label>
+                <input
+                  id="amt"
+                  inputMode="decimal"
+                  value={plan.amount}
+                  disabled={locked}
+                  onChange={(e) =>
+                    setPlan((p) => ({ ...p, amount: e.target.value.replace(/[^\d.]/g, "") }))
+                  }
+                />
+              </div>
+              <button
+                className="btn btn--quiet"
+                disabled={locked || busy || !plan.src || !plan.dst || !plan.amount}
+                onClick={() =>
+                  run("Rebalancing submitted.", () =>
+                    rebalance(connection!, [
+                      {
+                        src_validator: plan.src,
+                        dst_validator: plan.dst,
+                        amount: toMicro(plan.amount),
+                      },
+                    ]),
+                  )
                 }
-              />
-            </label>
+              >
+                Redelegate
+              </button>
+            </div>
+          </div>
 
+          <div className="panel">
+            <div className="row">
+              <div>
+                <h2 className="h2">Deposits</h2>
+                <p className="hint" style={{ marginTop: 4, maxWidth: "40ch" }}>
+                  Pausing blocks new deposits only. Claims are never pausable, so this
+                  cannot trap anyone&apos;s funds.
+                </p>
+              </div>
+              <span className={`pill ${config.paused ? "pill--warn" : "pill--good"}`}>
+                {config.paused ? "paused" : "open"}
+              </span>
+            </div>
             <button
-              className="btn btn--md btn--ghost"
-              disabled={locked || !plan.src || !plan.dst || !plan.amount}
+              className={`btn btn--block ${config.paused ? "" : "btn--ghost"}`}
+              style={{ marginTop: "var(--s-4)" }}
+              disabled={locked || busy}
               onClick={() =>
-                run("Rebalancing submitted.", () =>
-                  rebalance(connection!, [
-                    {
-                      src_validator: plan.src,
-                      dst_validator: plan.dst,
-                      amount: toMicro(plan.amount),
-                    },
-                  ]),
+                run(config.paused ? "Deposits resumed." : "Deposits paused.", () =>
+                  setPaused(connection!, !config.paused),
                 )
               }
             >
-              Redelegate
+              {config.paused ? "Resume deposits" : "Pause deposits"}
             </button>
           </div>
         </div>
-      </div>
-
-      <div>
-        <div className="panel">
-          <p className="h2">Performance fee</p>
-          <div className="amount">
-            <input
-              inputMode="decimal"
-              value={fee}
-              disabled={locked}
-              onChange={(e) => setFee(e.target.value.replace(/[^\d.]/g, ""))}
-            />
-            <span className="denom">%</span>
-          </div>
-          <p className="note" style={{ margin: "14px 0" }}>
-            Taken from staking rewards, never from principal. The network capped this at{" "}
-            {config.limits.max_performance_fee_bps / 100}%.
-          </p>
-          <button
-            className="btn btn--md"
-            disabled={locked || (Number(fee) || 0) * 100 > config.limits.max_performance_fee_bps}
-            onClick={() =>
-              run("Fee updated.", () =>
-                setPerformanceFee(connection!, Math.round((Number(fee) || 0) * 100)),
-              )
-            }
-          >
-            Set fee
-          </button>
-        </div>
-
-        <div className="panel">
-          <p className="h2">Deposits</p>
-          <p className="stat-value numeral">{config.paused ? "Paused" : "Open"}</p>
-          <p className="note" style={{ margin: "14px 0" }}>
-            Pausing blocks new deposits only. Claims on matured windows are never pausable,
-            so this cannot trap anyone&apos;s funds.
-          </p>
-          <button
-            className="btn btn--md btn--ghost"
-            disabled={locked}
-            onClick={() =>
-              run(config.paused ? "Deposits resumed." : "Deposits paused.", () =>
-                setPaused(connection!, !config.paused),
-              )
-            }
-          >
-            {config.paused ? "Resume deposits" : "Pause deposits"}
-          </button>
-        </div>
-
-        <div className="panel">
-          <p className="h2">Who you are signing as</p>
-          <div className="row">
-            <span className="k">Manager on chain</span>
-            <span className="v">{shortAddress(config.manager)}</span>
-          </div>
-          <p className="note" style={{ marginTop: 12 }}>
-            {!connection
-              ? "Connect a wallet to act as the manager."
-              : isManager
-                ? "This wallet is the manager. Everything on this screen is bounded by ceilings in the contract — there is no action here that can move a user's funds."
-                : "This wallet is not the manager, so the controls are read-only. Changing who the manager is takes a governance-approved code version."}
-          </p>
-        </div>
-
-        {feedback.kind !== "idle" && <Status feedback={feedback} />}
       </div>
     </div>
   );

@@ -244,17 +244,40 @@ async function main() {
   deployment.core.codeHash = next.codeHash;
   deployment.upgradedAt = new Date().toISOString();
 
+  const { writeFileSync, existsSync, readFileSync } = await import("node:fs");
   const path = join(ROOT, "deploy", `${name}.json`);
-  const { writeFileSync } = await import("node:fs");
   writeFileSync(path, `${JSON.stringify(deployment, null, 2)}\n`);
   console.log(`\nWrote ${path}`);
 
-  if (next.codeHash !== deployment.core.codeHash) {
-    console.log("\nThe core code hash changed, so update the frontend and keeper:");
+  /*
+   * Keep the local frontend in step.
+   *
+   * A migration changes the code hash, and the app addresses the contract by hash as well
+   * as by address — so a stale value does not degrade, it stops every query dead. Printing
+   * the new hash and trusting whoever ran this to copy it is precisely what went wrong the
+   * first time this ran, so the local env file is rewritten here. Only when it already
+   * points at this network, and never anything outside the repo.
+   */
+  const envPath = join(ROOT, "app", ".env.local");
+  if (existsSync(envPath)) {
+    const env = readFileSync(envPath, "utf8");
+    if (env.includes(`NEXT_PUBLIC_CHAIN_ID=${network.chainId}`)) {
+      writeFileSync(
+        envPath,
+        env.replace(/NEXT_PUBLIC_CORE_CODE_HASH=.*/, `NEXT_PUBLIC_CORE_CODE_HASH=${next.codeHash}`),
+      );
+      console.log(`Updated ${envPath}`);
+    } else {
+      console.log(`Left ${envPath} alone — it points at a different network.`);
+    }
   }
+
+  console.log("\nThe code hash changed. Everything that talks to this contract needs it, and");
+  console.log("a stale one does not degrade — it stops every query dead:");
   console.log(`\n  NEXT_PUBLIC_CORE_CODE_HASH=${next.codeHash}`);
   console.log(`  LST_CORE_CODE_HASH=${next.codeHash}`);
-  console.log("\nRedeploy the app after setting it — the hash is baked in at build time.");
+  console.log("\nSet it wherever the app is hosted and redeploy — it is compiled into the");
+  console.log("bundle, so saving the variable is not enough on its own. Restart the keeper.");
 }
 
 main().catch((err) => {
