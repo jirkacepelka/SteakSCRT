@@ -44,7 +44,7 @@ export async function sync(keeper: Keeper, config: KeeperConfig): Promise<TaskOu
       return { task: "sync", did: "work", detail: `failed after ${calls}: ${result.error}` };
     }
     const state = await keeper.state();
-    if (!state.is_stale) {
+    if (!state.is_unattended) {
       return {
         task: "sync",
         did: "work",
@@ -85,7 +85,7 @@ export async function compound(keeper: Keeper, config: KeeperConfig): Promise<Ta
     // rewards and a fresh cache.
     const state = await keeper.state();
     harvested = BigInt(state.pending_rewards);
-    if (!state.is_stale && harvested === 0n) {
+    if (!state.is_unattended && harvested === 0n) {
       return { task: "compound", did: "work", detail: `swept in ${calls} call(s)` };
     }
   }

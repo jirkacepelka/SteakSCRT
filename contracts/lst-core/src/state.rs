@@ -149,7 +149,7 @@ impl TotalsCache {
     /// own transaction, so nothing prices against this. It survives as a health signal —
     /// a stale cache means nobody has compounded lately, which costs yield rather than
     /// correctness, and both the keeper and the app surface it as such.
-    pub fn is_stale(&self, now: u64, max_age: u64) -> bool {
+    pub fn is_unattended(&self, now: u64, max_age: u64) -> bool {
         now.saturating_sub(self.last_sync_time) > max_age
     }
 }
@@ -194,8 +194,8 @@ mod tests {
     fn freshness_is_inclusive_at_the_boundary() {
         let c = cache(1_000);
         // Exactly at the limit still counts as fresh.
-        assert!(!c.is_stale(1_000 + 7_200, 7_200));
-        assert!(c.is_stale(1_000 + 7_201, 7_200));
+        assert!(!c.is_unattended(1_000 + 7_200, 7_200));
+        assert!(c.is_unattended(1_000 + 7_201, 7_200));
     }
 
     #[test]
@@ -203,7 +203,7 @@ mod tests {
         // Block time should never go backwards, but saturating arithmetic here means a
         // chain quirk degrades to "fresh" rather than to an underflow panic.
         let c = cache(5_000);
-        assert!(!c.is_stale(4_000, 7_200));
+        assert!(!c.is_unattended(4_000, 7_200));
     }
 
 }

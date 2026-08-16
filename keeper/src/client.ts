@@ -13,7 +13,7 @@ export interface ProtocolState {
   scrt_owed_to_windows: string;
   total_supply: string;
   last_sync_time: number;
-  is_stale: boolean;
+  is_unattended: boolean;
   exchange_rate: string;
 }
 

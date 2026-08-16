@@ -23,3 +23,8 @@ lst-types.workspace = true
 schemars.workspace = true
 serde.workspace = true
 thiserror.workspace = true
+
+[dev-dependencies]
+# Property testing for the exchange-rate arithmetic. Dev-only: it never reaches the wasm
+# artifact, so it cannot affect what the enclave validates.
+proptest = { version = "1.5", default-features = false, features = ["std"] }

@@ -172,7 +172,7 @@ pub enum QueryAnswer {
     /// SCRT per derivative token, scaled by 10^18.
     ExchangeRate {
         rate: Uint128,
-        is_stale: bool,
+        is_unattended: bool,
     },
     Validators {
         validators: Vec<ValidatorEntry>,

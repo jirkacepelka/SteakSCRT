@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 899e490835e620f109a377673e7bfa13ac668fb00ede3cf1a3942aac0a494df2 # shrinks to p = PoolTotals { bonded: Uint128(3060748496375), pending_rewards: Uint128(498954285), liquid: Uint128(994912206), owed_backed: Uint128(0), supply: Uint128(1) }, fraction = 100

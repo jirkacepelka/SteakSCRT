@@ -64,7 +64,7 @@ describe("liquid staking, end to end", { concurrency: 1 }, () => {
     assert.equal(state.total_bonded, "10000000", "the bootstrap seed is delegated");
     assert.equal(state.total_supply, "10000000", "and backed one for one");
     assert.equal(state.exchange_rate, PARITY);
-    assert.equal(state.is_stale, false);
+    assert.equal(state.is_unattended, false);
 
     const validators = await query.validators();
     const delegated = validators.reduce((sum, v) => sum + BigInt(v.bonded), 0n);
@@ -87,7 +87,7 @@ describe("liquid staking, end to end", { concurrency: 1 }, () => {
 
     await sleep(12_000);
     const before = await api(idle).state();
-    assert.equal(before.is_stale, true, "the cache should be reported unattended by now");
+    assert.equal(before.is_unattended, true, "the cache should be reported unattended by now");
 
     await callCore(idle, depositor, { deposit: {} }, [
       { denom: "uscrt", amount: (5n * SCRT).toString() },

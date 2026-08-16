@@ -67,7 +67,7 @@ function checkExchangeRate(state: ProtocolState, memory: Memory): Finding {
  * about.
  */
 function checkFreshness(state: ProtocolState): Finding {
-  if (!state.is_stale) {
+  if (!state.is_unattended) {
     const age = Math.floor(Date.now() / 1000) - state.last_sync_time;
     return { severity: "ok", check: "freshness", detail: `synced ${age}s ago` };
   }

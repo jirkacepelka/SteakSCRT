@@ -108,6 +108,32 @@ const KEEPER_GAS = Math.ceil(
 report("sync (keeper)", await exec(core, { sync: { limit: 25 } }, KEEPER_GAS), KEEPER_GAS);
 report("compound (keeper)", await exec(core, { compound: { limit: 25 } }, KEEPER_GAS), KEEPER_GAS);
 
+/*
+ * The worst case a user can land in.
+ *
+ * A deposit or withdrawal closes an overdue window on its way past, which adds an
+ * undelegation plan and a staking message per validator on top of the ordinary cost. It is
+ * rare — one caller in however many — but it is the one that has to fit, and measuring
+ * only the common path is how a limit ends up too tight for the transaction that matters.
+ */
+console.log("\nwaiting for the window to go overdue, to measure the expensive path…");
+while (true) {
+  const open = (
+    await client.query.compute.queryContract({
+      ...core,
+      query: { windows: { state: "open", start_after: null, limit: 1 } },
+    })
+  ).windows.windows[0];
+  if (Math.floor(Date.now() / 1000) >= open.closes_at) break;
+  await sleep(10_000);
+}
+
+report(
+  "deposit + closes window",
+  await exec(core, { deposit: {} }, depositGas, [{ denom: "uscrt", amount: "5000000" }]),
+  depositGas,
+);
+
 console.log("\ndriving a window to maturity for the claim path…");
 for (let i = 0; i < 40; i++) {
   await sleep(15_000);

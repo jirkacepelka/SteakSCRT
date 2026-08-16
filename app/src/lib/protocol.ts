@@ -16,7 +16,7 @@ export interface ProtocolState {
   scrt_owed_to_windows: string;
   total_supply: string;
   last_sync_time: number;
-  is_stale: boolean;
+  is_unattended: boolean;
   exchange_rate: string;
 }
 
@@ -193,8 +193,16 @@ const GAS_PRICE = 0.025;
 /** Ceiling the contract compiles in, and the fallback when the set is not loaded yet. */
 const MAX_VALIDATORS = 20;
 
-/** Fixed cost of the action, before any delegation is read. */
-const GAS_BASE = { deposit: 85_000, unbond: 125_000 } as const;
+/**
+ * Fixed cost of the action, before any delegation is read.
+ *
+ * Both are sized for the expensive case, not the common one: a deposit or withdrawal also
+ * closes an overdue window when it finds one, which adds an undelegation plan and a
+ * staking message. Measured at four validators, an ordinary deposit costs 113 942 gas and
+ * one that closes a window costs 152 829 — so sizing from the ordinary figure left the
+ * transaction that matters at 1.9x margin instead of the intended 2.5x.
+ */
+const GAS_BASE = { deposit: 125_000, unbond: 125_000 } as const;
 const GAS_PER_VALIDATOR = 7_500;
 const GAS_MARGIN = 2.5;
 

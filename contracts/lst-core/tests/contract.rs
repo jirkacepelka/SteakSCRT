@@ -194,6 +194,29 @@ fn chain_confirms_delegations(deps: &mut Deps, env: &Env) {
     );
 }
 
+/// The id of the window currently accepting requests.
+fn open_window_id(deps: cosmwasm_std::Deps, env: Env) -> u64 {
+    let answer: QueryAnswer =
+        from_binary(&query(deps, env, QueryMsg::Windows { state: Some(WindowState::Open), start_after: None, limit: None }).unwrap())
+            .unwrap();
+    match answer {
+        QueryAnswer::Windows { windows } => windows[0].id,
+        other => panic!("unexpected answer {other:?}"),
+    }
+}
+
+/// Occupy every validator's unbonding entry slots, so nothing can be undelegated.
+fn fill_entry_slots(deps: &mut Deps) {
+    let mut set: Vec<lst_types::core::types::ValidatorEntry> =
+        lst_core::state::VALIDATORS.load(deps.as_mut().storage).unwrap();
+    for entry in set.iter_mut() {
+        entry.active_unbond_entries = 6;
+    }
+    lst_core::state::VALIDATORS
+        .save(deps.as_mut().storage, &set)
+        .unwrap();
+}
+
 /// Instantiate and bootstrap, leaving a pool of exactly `SEED` backed by `SEED` shares.
 fn bootstrapped() -> (Deps, Env) {
     let mut deps = mock_dependencies();
@@ -692,7 +715,7 @@ fn a_deposit_still_works_after_nobody_has_synced_for_hours() {
     match answer {
         QueryAnswer::State(state) => {
             assert!(
-                !state.is_stale,
+                !state.is_unattended,
                 "the deposit's own refresh should have restored freshness"
             );
             assert_eq!(state.last_sync_time, env.block.time.seconds());
@@ -761,8 +784,8 @@ fn sync_lowers_the_exchange_rate_after_a_slashing() {
         from_binary(&query(deps.as_ref(), env, QueryMsg::ExchangeRate {}).unwrap()).unwrap();
 
     match answer {
-        QueryAnswer::ExchangeRate { rate, is_stale } => {
-            assert!(!is_stale);
+        QueryAnswer::ExchangeRate { rate, is_unattended } => {
+            assert!(!is_unattended);
             assert_eq!(
                 rate,
                 Uint128::new(800_000_000_000_000_000),
@@ -833,7 +856,7 @@ fn a_partial_sync_does_not_claim_the_cache_is_fresh() {
     let answer: QueryAnswer =
         from_binary(&query(deps.as_ref(), env.clone(), QueryMsg::State {}).unwrap()).unwrap();
     match answer {
-        QueryAnswer::State(state) => assert!(state.is_stale, "still stale after a partial sweep"),
+        QueryAnswer::State(state) => assert!(state.is_unattended, "still stale after a partial sweep"),
         other => panic!("unexpected answer {other:?}"),
     }
 
@@ -849,7 +872,7 @@ fn a_partial_sync_does_not_claim_the_cache_is_fresh() {
     let answer: QueryAnswer =
         from_binary(&query(deps.as_ref(), env, QueryMsg::State {}).unwrap()).unwrap();
     match answer {
-        QueryAnswer::State(state) => assert!(!state.is_stale),
+        QueryAnswer::State(state) => assert!(!state.is_unattended),
         other => panic!("unexpected answer {other:?}"),
     }
 }
@@ -1202,6 +1225,108 @@ fn claiming_before_maturity_reports_when_the_money_arrives() {
         matches!(err, ContractError::WindowNotMatured { .. }),
         "got {err:?}"
     );
+}
+
+#[test]
+fn a_claim_matures_its_own_window_without_the_keeper() {
+    // The failure this closes: unbonding completes, the SCRT is sitting in the contract's
+    // balance, and the claimant is told the window has not matured — true only of the
+    // bookkeeping, which nobody had run. Money the chain had already released was
+    // unreachable until a bot showed up.
+    let (mut deps, mut env) = with_user_deposit();
+    unbond(&mut deps, &env, USER, 5_000_000).unwrap();
+
+    env.block.time = env.block.time.plus_seconds(WINDOW);
+    execute(
+        deps.as_mut(),
+        env.clone(),
+        mock_info(USER, &[]),
+        ExecuteMsg::AdvanceWindow {},
+    )
+    .unwrap();
+
+    env.block.time = env.block.time.plus_seconds(UNBONDING);
+    deps.querier.update_balance(
+        env.contract.address.clone(),
+        vec![Coin::new(5_000_000, DENOM)],
+    );
+
+    // Deliberately no CollectMatured. The claim has to do it.
+    let res = execute(
+        deps.as_mut(),
+        env.clone(),
+        mock_info(USER, &[]),
+        ExecuteMsg::ClaimMatured { window_ids: None },
+    )
+    .expect("a claim must not depend on somebody having run the keeper");
+
+    let sent = res.messages.iter().find_map(|m| match &m.msg {
+        CosmosMsg::Bank(BankMsg::Send { to_address, amount }) => {
+            Some((to_address.clone(), amount[0].amount))
+        }
+        _ => None,
+    });
+    assert_eq!(sent, Some((USER.to_string(), Uint128::new(5_000_000))));
+}
+
+#[test]
+fn a_deposit_closes_an_overdue_window_on_its_way_past() {
+    // Nothing else moves the queue when no keeper runs, and a window that never closes is
+    // a withdrawal that never matures.
+    let (mut deps, mut env) = with_user_deposit();
+    unbond(&mut deps, &env, USER, 5_000_000).unwrap();
+
+    let before = open_window_id(deps.as_ref(), env.clone());
+    env.block.time = env.block.time.plus_seconds(WINDOW);
+
+    deps.querier.update_balance(
+        env.contract.address.clone(),
+        vec![Coin::new(5_000_000, DENOM)],
+    );
+    let res = execute(
+        deps.as_mut(),
+        env.clone(),
+        mock_info(USER, &[Coin::new(5_000_000, DENOM)]),
+        ExecuteMsg::Deposit {},
+    )
+    .unwrap();
+
+    assert_ne!(
+        open_window_id(deps.as_ref(), env.clone()),
+        before,
+        "the overdue window should have closed and a fresh one opened"
+    );
+    assert!(
+        res.messages.iter().any(|m| matches!(
+            &m.msg,
+            CosmosMsg::Staking(StakingMsg::Undelegate { .. })
+        )),
+        "closing the window should have undelegated what it owed"
+    );
+}
+
+#[test]
+fn a_deposit_is_not_refused_when_the_window_cannot_close() {
+    // The opportunistic close must never become a reason a deposit fails. With every
+    // validator at its entry ceiling there is nowhere to undelegate, and the deposit still
+    // has to go through — the window simply waits for a later caller.
+    let (mut deps, mut env) = with_user_deposit();
+    unbond(&mut deps, &env, USER, 5_000_000).unwrap();
+
+    fill_entry_slots(&mut deps);
+    env.block.time = env.block.time.plus_seconds(WINDOW);
+
+    deps.querier.update_balance(
+        env.contract.address.clone(),
+        vec![Coin::new(5_000_000, DENOM)],
+    );
+    execute(
+        deps.as_mut(),
+        env.clone(),
+        mock_info(USER, &[Coin::new(5_000_000, DENOM)]),
+        ExecuteMsg::Deposit {},
+    )
+    .expect("a full unbonding queue must not block deposits");
 }
 
 #[test]

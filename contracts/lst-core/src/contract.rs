@@ -228,16 +228,24 @@ fn execute_receive(
     }
     .to_cosmos_msg(token.code_hash, token.address.to_string(), None)?;
 
+    let matures_at_estimate = window
+        .closes_at
+        .saturating_add(config.params.unbonding_period_secs);
+
+    // Joined the window first, then close it if it is overdue — so a request arriving
+    // after the deadline leaves in the batch it just joined rather than waiting out a
+    // whole further window.
+    let mut messages = vec![burn];
+    messages.extend(close_window_if_overdue(deps.branch(), &env, &config)?);
+
     Ok(Response::new()
-        .add_message(burn)
+        .add_messages(messages)
         .add_attribute("action", "unbond")
         .set_data(to_binary(&ExecuteAnswer::Unbond {
             window_id,
             shares_burned: amount,
             scrt_owed: owed,
-            matures_at_estimate: window
-                .closes_at
-                .saturating_add(config.params.unbonding_period_secs),
+            matures_at_estimate,
         })?))
 }
 
@@ -247,8 +255,36 @@ fn execute_advance_window(deps: DepsMut, env: Env) -> Result<Response, ContractE
     let now = env.block.time.seconds();
 
     let closing_id = OPEN_WINDOW.load(deps.storage)?;
-    let mut window = load_window(deps.as_ref(), closing_id)?;
+    let window = load_window(deps.as_ref(), closing_id)?;
+    // Explicit callers get told why nothing happened; the opportunistic path below stays
+    // quiet instead.
     windows::assert_closable(&window, now)?;
+
+    let (messages, closed_id, next_id, undelegated) = close_open_window(deps, &env, &config)?;
+
+    Ok(Response::new()
+        .add_messages(messages)
+        .add_attribute("action", "advance_window")
+        .set_data(to_binary(&ExecuteAnswer::AdvanceWindow {
+            closed_window_id: closed_id,
+            new_window_id: next_id,
+            scrt_undelegated: undelegated,
+        })?))
+}
+
+/// Close the open window, undelegate what it owes, and open its successor.
+///
+/// Split out of `AdvanceWindow` so a deposit or a withdrawal request can carry it. The
+/// queue has to keep moving for anyone to ever be paid, and tying that to a bot meant a
+/// stalled bot left matured money unreachable.
+fn close_open_window(
+    deps: DepsMut,
+    env: &Env,
+    config: &Config,
+) -> Result<(Vec<CosmosMsg>, u64, u64, Uint128), ContractError> {
+    let now = env.block.time.seconds();
+    let closing_id = OPEN_WINDOW.load(deps.storage)?;
+    let mut window = load_window(deps.as_ref(), closing_id)?;
 
     let mut messages: Vec<CosmosMsg> = Vec::new();
     let undelegated = window.scrt_owed;
@@ -305,14 +341,47 @@ fn execute_advance_window(deps: DepsMut, env: Env) -> Result<Response, ContractE
     WINDOWS.insert(deps.storage, &next.id, &next)?;
     OPEN_WINDOW.save(deps.storage, &next.id)?;
 
-    Ok(Response::new()
-        .add_messages(messages)
-        .add_attribute("action", "advance_window")
-        .set_data(to_binary(&ExecuteAnswer::AdvanceWindow {
-            closed_window_id: closing_id,
-            new_window_id: next.id,
-            scrt_undelegated: undelegated,
-        })?))
+    Ok((messages, closing_id, next.id, undelegated))
+}
+
+/// Close the open window if it is overdue, and say nothing if it is not.
+///
+/// Best effort by design. This rides along on user transactions, so it must never be the
+/// reason one fails: a window that cannot be closed yet — not due, or every validator at
+/// its unbonding-entry ceiling — simply waits for the next caller. Closing late is safe,
+/// and widens the spacing between entries, which is the direction that keeps the protocol
+/// under the chain's limit.
+fn close_window_if_overdue(
+    mut deps: DepsMut,
+    env: &Env,
+    config: &Config,
+) -> Result<Vec<CosmosMsg>, ContractError> {
+    let now = env.block.time.seconds();
+    let open_id = OPEN_WINDOW.load(deps.storage)?;
+    let window = load_window(deps.as_ref(), open_id)?;
+
+    if windows::assert_closable(&window, now).is_err() {
+        return Ok(Vec::new());
+    }
+
+    // Capacity is the other way this can legitimately fail. Checking it here, rather than
+    // letting the error escape, is what keeps a full unbonding queue from blocking
+    // deposits.
+    if !window.scrt_owed.is_zero() {
+        let set = VALIDATORS.load(deps.storage)?;
+        if validators::plan_undelegation(
+            &set,
+            window.scrt_owed,
+            config.params.max_unbond_entries_per_validator,
+        )
+        .is_err()
+        {
+            return Ok(Vec::new());
+        }
+    }
+
+    let (messages, _, _, _) = close_open_window(deps.branch(), env, config)?;
+    Ok(messages)
 }
 
 /// Mark windows whose unbonding period has elapsed as claimable.
@@ -322,8 +391,29 @@ fn execute_collect_matured(
     limit: Option<u32>,
 ) -> Result<Response, ContractError> {
     let config = CONFIG.load(deps.storage)?;
+    let matured = mature_due_windows(deps, &env, &config, limit.unwrap_or(DEFAULT_SYNC_LIMIT))?;
+
+    Ok(Response::new()
+        .add_attribute("action", "collect_matured")
+        .set_data(to_binary(&ExecuteAnswer::CollectMatured {
+            windows_matured: matured,
+        })?))
+}
+
+/// Move every window whose unbonding has elapsed into `Matured`.
+///
+/// Split out of `CollectMatured` so a claim can run it first. A window is only claimable
+/// once it is marked matured, and marking it used to be a keeper's job alone — so an
+/// absent keeper left money that the chain had already released sitting unreachable in the
+/// contract's own balance. Nobody should have to wait for a bot to be paid what is theirs.
+fn mature_due_windows(
+    deps: DepsMut,
+    env: &Env,
+    config: &Config,
+    limit: u32,
+) -> Result<Vec<u64>, ContractError> {
     let now = env.block.time.seconds();
-    let limit = limit.unwrap_or(DEFAULT_SYNC_LIMIT).max(1) as usize;
+    let limit = limit.max(1) as usize;
 
     let active = ACTIVE_WINDOWS.load(deps.storage)?;
     let balance = deps
@@ -388,21 +478,24 @@ fn execute_collect_matured(
         TOTALS.save(deps.storage, &totals)?;
     }
 
-    Ok(Response::new()
-        .add_attribute("action", "collect_matured")
-        .set_data(to_binary(&ExecuteAnswer::CollectMatured {
-            windows_matured: matured,
-        })?))
+    Ok(matured)
 }
 
 /// Pay out a caller's claims against matured windows.
 fn execute_claim_matured(
-    deps: DepsMut,
+    mut deps: DepsMut,
     env: Env,
     info: MessageInfo,
     window_ids: Option<Vec<u64>>,
 ) -> Result<Response, ContractError> {
     let config = CONFIG.load(deps.storage)?;
+
+    // Mature anything the chain has already released, rather than requiring somebody to
+    // have run the keeper first. Without this a claimant whose money is sitting in the
+    // contract's balance is told the window has not matured, which is true only of the
+    // bookkeeping.
+    mature_due_windows(deps.branch(), &env, &config, u32::MAX)?;
+
     let claims = state::claims_for(&info.sender);
 
     let ids = match window_ids {
@@ -593,7 +686,7 @@ fn execute_deposit(mut deps: DepsMut, env: Env, info: MessageInfo) -> Result<Res
     totals.total_supply += shares;
     TOTALS.save(deps.storage, &totals)?;
 
-    let messages = vec![
+    let mut messages = vec![
         TokenExecuteMsg::Mint {
             recipient: info.sender.to_string(),
             amount: shares,
@@ -603,6 +696,10 @@ fn execute_deposit(mut deps: DepsMut, env: Env, info: MessageInfo) -> Result<Res
         .to_cosmos_msg(token.code_hash, token.address.to_string(), None)?,
         delegate_msg(&set[idx].address, &config.bonded_denom, deposit),
     ];
+
+    // Any activity advances the queue. Best effort — a window that cannot close yet is
+    // never a reason to refuse someone's deposit.
+    messages.extend(close_window_if_overdue(deps.branch(), &env, &config)?);
 
     Ok(Response::new()
         .add_messages(messages)
@@ -1049,7 +1146,7 @@ pub fn query(deps: Deps, env: Env, msg: QueryMsg) -> StdResult<Binary> {
             let state = query_state(deps, &env)?;
             to_binary(&QueryAnswer::ExchangeRate {
                 rate: state.exchange_rate,
-                is_stale: state.is_stale,
+                is_unattended: state.is_unattended,
             })
         }
         QueryMsg::Validators {} => to_binary(&QueryAnswer::Validators {
@@ -1150,7 +1247,7 @@ fn query_state(deps: Deps, env: &Env) -> StdResult<StateResponse> {
         scrt_owed_to_windows: totals.owed_total(),
         total_supply: totals.total_supply,
         last_sync_time: totals.last_sync_time,
-        is_stale: totals.is_stale(now, config.params.sync_stale_after_secs),
+        is_unattended: totals.is_unattended(now, config.params.sync_stale_after_secs),
         exchange_rate: rate,
     })
 }

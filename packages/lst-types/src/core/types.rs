@@ -232,7 +232,12 @@ pub struct StateResponse {
     pub total_supply: Uint128,
     pub last_sync_time: u64,
     /// True when the cache is too old to price deposits or withdrawals against.
-    pub is_stale: bool,
+    /// Nobody has run upkeep within `sync_stale_after_secs`.
+    ///
+    /// A health signal, not a gate. Deposits, withdrawals and claims all do their own
+    /// bookkeeping, so this costs yield — rewards sitting unharvested — rather than
+    /// access to anyone's money.
+    pub is_unattended: bool,
     /// SCRT per derivative token, scaled by 10^18.
     pub exchange_rate: Uint128,
 }
