@@ -5,8 +5,9 @@ import { useEffect, useRef, useState } from "react";
 import { fromMicro, getPermit, rateToNumber, shortAddress } from "@/lib/chain";
 import { fetchScrtBalance, fetchState, fetchTokenBalance } from "@/lib/protocol";
 
-import { Check, Copy, LogOut, Spinner } from "./Icon";
+import { ArrowRight, Check, Copy, LogOut, Settings, Spinner } from "./Icon";
 import { Portal } from "./Portal";
+import { SettingsBody } from "./Settings";
 import { readable, useToast } from "./Toast";
 import { useWallet } from "./Wallet";
 
@@ -35,6 +36,9 @@ export function AccountDrawer({ onClose }: { onClose: () => void }) {
   const [rate, setRate] = useState(1);
   const [revealing, setRevealing] = useState(false);
   const [copied, setCopied] = useState(false);
+  // Settings live behind the gear here rather than in the bar, so the chrome carries one
+  // control per session concern instead of two.
+  const [view, setView] = useState<"account" | "settings">("account");
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
@@ -89,6 +93,17 @@ export function AccountDrawer({ onClose }: { onClose: () => void }) {
     <Portal>
       <div className="drawer" ref={panel} role="dialog" aria-label="Account">
         <div className="drawer-head">
+          {view === "settings" && (
+            <button
+              className="icon-btn"
+              onClick={() => setView("account")}
+              aria-label="Back to account"
+              title="Back"
+              style={{ transform: "rotate(180deg)" }}
+            >
+              <ArrowRight size={16} />
+            </button>
+          )}
           <button
             className="addr"
             onClick={() => {
@@ -104,6 +119,16 @@ export function AccountDrawer({ onClose }: { onClose: () => void }) {
           </button>
           <button
             className="icon-btn"
+            onClick={() => setView((v) => (v === "settings" ? "account" : "settings"))}
+            aria-label="Settings"
+            title="Settings"
+            aria-pressed={view === "settings"}
+            style={view === "settings" ? { color: "var(--accent)", borderColor: "var(--accent)" } : undefined}
+          >
+            <Settings size={16} />
+          </button>
+          <button
+            className="icon-btn"
             onClick={() => {
               disconnect();
               onClose();
@@ -116,6 +141,11 @@ export function AccountDrawer({ onClose }: { onClose: () => void }) {
         </div>
 
         <div className="drawer-body">
+          {view === "settings" ? (
+            <SettingsBody />
+          ) : (
+            <>
+
           <div>
             <p className="stat-label" style={{ marginBottom: 4 }}>
               Total
@@ -183,10 +213,12 @@ export function AccountDrawer({ onClose }: { onClose: () => void }) {
             </div>
           </div>
 
-          <p className="hint" style={{ marginTop: "auto" }}>
-            Your dSCRT balance is private contract state. Revealing it costs a signature,
-            not a transaction — and the signature stays in this browser.
-          </p>
+              <p className="hint" style={{ marginTop: "auto" }}>
+                Your dSCRT balance is private contract state. Revealing it costs a
+                signature, not a transaction — and the signature stays in this browser.
+              </p>
+            </>
+          )}
         </div>
       </div>
     </Portal>

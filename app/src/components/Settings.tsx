@@ -31,17 +31,7 @@ import { useTheme } from "./Theme";
  * mistake worth catching loudly rather than letting it fail later as an empty screen.
  */
 export function SettingsDialog({ onClose }: { onClose: () => void }) {
-  const { theme, toggle } = useTheme();
-  const [current, setCurrent] = useState("");
-  const [known, setKnown] = useState<string[]>([]);
-  const [draft, setDraft] = useState("");
-  const [health, setHealth] = useState<Record<string, EndpointHealth | "checking">>({});
   const panel = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    setCurrent(lcdUrl());
-    setKnown([DEPLOYMENT.lcdUrl, ...customEndpoints()]);
-  }, []);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
@@ -60,6 +50,45 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
       window.removeEventListener("mousedown", onDown);
     };
   }, [onClose]);
+
+  return (
+    <Portal>
+      <div className="drawer" ref={panel} role="dialog" aria-label="Settings">
+        <div className="drawer-head">
+          <h2 className="h2" style={{ flex: 1 }}>
+            Settings
+          </h2>
+          <button className="icon-btn" onClick={onClose} aria-label="Close settings">
+            <Close />
+          </button>
+        </div>
+        <div className="drawer-body">
+          <SettingsBody />
+        </div>
+      </div>
+    </Portal>
+  );
+}
+
+/**
+ * The settings themselves, without a container.
+ *
+ * Separated so the account panel can host them: once a wallet is connected, settings live
+ * behind the gear in that panel rather than taking a second slot in the bar. They keep
+ * their own place in the bar while disconnected, because choosing a node is exactly what
+ * somebody needs when nothing is working — including, sometimes, connecting.
+ */
+export function SettingsBody() {
+  const { theme, toggle } = useTheme();
+  const [current, setCurrent] = useState("");
+  const [known, setKnown] = useState<string[]>([]);
+  const [draft, setDraft] = useState("");
+  const [health, setHealth] = useState<Record<string, EndpointHealth | "checking">>({});
+
+  useEffect(() => {
+    setCurrent(lcdUrl());
+    setKnown([DEPLOYMENT.lcdUrl, ...customEndpoints()]);
+  }, []);
 
   const check = async (url: string) => {
     setHealth((h) => ({ ...h, [url]: "checking" }));
@@ -99,100 +128,89 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
   const draftError = health.__draft;
 
   return (
-    <Portal>
-      <div className="drawer" ref={panel} role="dialog" aria-label="Settings">
-        <div className="drawer-head">
-          <h2 className="h2">Settings</h2>
-          <button className="icon-btn" onClick={onClose} aria-label="Close settings">
-            <Close />
+    <>
+      <section className="stack" style={{ gap: "var(--s-3)" }}>
+        <div className="row">
+          <span className="k">Appearance</span>
+          <button className="btn btn--quiet btn--sm" onClick={toggle}>
+            {theme === "dark" ? <Moon size={14} /> : <Sun size={14} />}
+            {theme === "dark" ? "Dark" : "Light"}
           </button>
         </div>
+      </section>
 
-        <div className="drawer-body">
-          <section className="stack" style={{ gap: "var(--s-3)" }}>
-            <div className="row">
-              <span className="k">Appearance</span>
-              <button className="btn btn--quiet btn--sm" onClick={toggle}>
-                {theme === "dark" ? <Moon size={14} /> : <Sun size={14} />}
-                {theme === "dark" ? "Dark" : "Light"}
-              </button>
-            </div>
-          </section>
+      <hr className="divider" />
 
-          <hr className="divider" />
-
-          <section className="stack" style={{ gap: "var(--s-3)" }}>
-            <div>
-              <h3 className="h3">Node</h3>
-              <p className="hint" style={{ marginTop: 4 }}>
-                Reads and transactions go through this endpoint. The contract does not care
-                which one you use, so if the default is slow or down, point it elsewhere.
-              </p>
-            </div>
-
-            <div className="stack" style={{ gap: "var(--s-2)" }}>
-              {known.map((url) => (
-                <EndpointRow
-                  key={url}
-                  url={url}
-                  isCurrent={url === current}
-                  isDefault={url === DEPLOYMENT.lcdUrl}
-                  health={health[url]}
-                  onUse={() => useEndpoint(url === DEPLOYMENT.lcdUrl ? null : url)}
-                  onRecheck={() => void check(url)}
-                  onForget={() => {
-                    forgetEndpoint(url);
-                    setKnown((list) => list.filter((u) => u !== url));
-                  }}
-                />
-              ))}
-            </div>
-
-            <div className="field">
-              <label htmlFor="endpoint">Add an endpoint</label>
-              <div style={{ display: "flex", gap: "var(--s-2)" }}>
-                <input
-                  id="endpoint"
-                  className="input"
-                  placeholder="https://lcd.example.com"
-                  value={draft}
-                  onChange={(e) => setDraft(e.target.value)}
-                  onKeyDown={(e) => e.key === "Enter" && void add()}
-                  spellCheck={false}
-                />
-                <button className="btn btn--quiet btn--sm" onClick={() => void add()}>
-                  Add
-                </button>
-              </div>
-              {draftError && draftError !== "checking" && (
-                <span className="hint" style={{ color: "var(--bad)" }}>
-                  {draftError.error}
-                </span>
-              )}
-            </div>
-          </section>
-
-          <hr className="divider" />
-
-          <section className="stack" style={{ gap: "var(--s-2)" }}>
-            <h3 className="h3">Deployment</h3>
-            <dl className="stack" style={{ gap: "var(--s-2)", margin: 0 }}>
-              <div className="row">
-                <dt>Network</dt>
-                <dd className="num">{DEPLOYMENT.chainId}</dd>
-              </div>
-              <CopyRow label="Staking contract" value={DEPLOYMENT.core.address} />
-              <CopyRow label="dSCRT token" value={DEPLOYMENT.token.address} />
-            </dl>
-            {!isDefaultEndpoint() && (
-              <p className="hint">
-                You are on a custom node. Clear it by choosing the default above.
-              </p>
-            )}
-          </section>
+      <section className="stack" style={{ gap: "var(--s-3)" }}>
+        <div>
+          <h3 className="h3">Node</h3>
+          <p className="hint" style={{ marginTop: 4 }}>
+            Reads and transactions go through this endpoint. The contract does not care
+            which one you use, so if the default is slow or down, point it elsewhere.
+          </p>
         </div>
-      </div>
-    </Portal>
+
+        <div className="stack" style={{ gap: "var(--s-2)" }}>
+          {known.map((url) => (
+            <EndpointRow
+              key={url}
+              url={url}
+              isCurrent={url === current}
+              isDefault={url === DEPLOYMENT.lcdUrl}
+              health={health[url]}
+              onUse={() => useEndpoint(url === DEPLOYMENT.lcdUrl ? null : url)}
+              onRecheck={() => void check(url)}
+              onForget={() => {
+                forgetEndpoint(url);
+                setKnown((list) => list.filter((u) => u !== url));
+              }}
+            />
+          ))}
+        </div>
+
+        <div className="field">
+          <label htmlFor="endpoint">Add an endpoint</label>
+          <div style={{ display: "flex", gap: "var(--s-2)" }}>
+            <input
+              id="endpoint"
+              className="input"
+              placeholder="https://lcd.example.com"
+              value={draft}
+              onChange={(e) => setDraft(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && void add()}
+              spellCheck={false}
+            />
+            <button className="btn btn--quiet btn--sm" onClick={() => void add()}>
+              Add
+            </button>
+          </div>
+          {draftError && draftError !== "checking" && (
+            <span className="hint" style={{ color: "var(--bad)" }}>
+              {draftError.error}
+            </span>
+          )}
+        </div>
+      </section>
+
+      <hr className="divider" />
+
+      <section className="stack" style={{ gap: "var(--s-2)" }}>
+        <h3 className="h3">Deployment</h3>
+        <dl className="stack" style={{ gap: "var(--s-2)", margin: 0 }}>
+          <div className="row">
+            <dt>Network</dt>
+            <dd className="num">{DEPLOYMENT.chainId}</dd>
+          </div>
+          <CopyRow label="Staking contract" value={DEPLOYMENT.core.address} />
+          <CopyRow label="dSCRT token" value={DEPLOYMENT.token.address} />
+        </dl>
+        {!isDefaultEndpoint() && (
+          <p className="hint">
+            You are on a custom node. Clear it by choosing the default above.
+          </p>
+        )}
+      </section>
+    </>
   );
 }
 

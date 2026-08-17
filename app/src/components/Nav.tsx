@@ -9,7 +9,7 @@ import { isDefaultEndpoint } from "@/lib/endpoint";
 
 import { Settings as SettingsIcon } from "./Icon";
 import { SettingsDialog } from "./Settings";
-import { ConnectButton } from "./Wallet";
+import { ConnectButton, useWallet } from "./Wallet";
 
 const TABS = [
   { href: "/", label: "Stake" },
@@ -31,7 +31,13 @@ function NetworkPill() {
 
 export function Nav() {
   const pathname = usePathname();
+  const { address } = useWallet();
   const [settings, setSettings] = useState(false);
+
+  // Once connected, settings live inside the account panel; two gears in one bar is one
+  // gear too many. Disconnected they stay here, because choosing a node is exactly what
+  // somebody needs when nothing works — including, sometimes, connecting.
+  const showGear = !address;
 
   return (
     <>
@@ -57,21 +63,27 @@ export function Nav() {
 
           <div className="nav-end">
             <NetworkPill />
-            <button
-              className="icon-btn"
-              onClick={() => setSettings(true)}
-              aria-label="Settings"
-              title={isDefaultEndpoint() ? "Settings" : "Settings — custom node in use"}
-              style={isDefaultEndpoint() ? undefined : { borderColor: "var(--accent)", color: "var(--accent)" }}
-            >
-              <SettingsIcon size={17} />
-            </button>
+            {showGear && (
+              <button
+                className="icon-btn"
+                onClick={() => setSettings(true)}
+                aria-label="Settings"
+                title={isDefaultEndpoint() ? "Settings" : "Settings — custom node in use"}
+                style={
+                  isDefaultEndpoint()
+                    ? undefined
+                    : { borderColor: "var(--accent)", color: "var(--accent)" }
+                }
+              >
+                <SettingsIcon size={17} />
+              </button>
+            )}
             <ConnectButton />
           </div>
         </div>
       </nav>
 
-      {settings && <SettingsDialog onClose={() => setSettings(false)} />}
+      {settings && showGear && <SettingsDialog onClose={() => setSettings(false)} />}
     </>
   );
 }
