@@ -1,0 +1,21 @@
+{
+  "messages": [
+    {
+      "@type": "/secret.compute.v1beta1.MsgContractGovernanceProposal",
+      "authority": "secret10d07y265gmmuvt4z0w9aw880jnsr700jc88vt0",
+      "title": "Raise the dSCRT manager fee ceiling to 15%",
+      "description": "Authorises migrating lst-core to code id 78, which raises max_performance_fee_bps from 1000 to 1500. The performance fee itself is unchanged at 700 bps and stays the manager's to set beneath the ceiling. Code hash 80edd69fe4d4bb651dd24e949df2b90b0e641a8d9dc5445497cd0d50c77e202b, reproducible from github.com/jirkacepelka/SteakSCRT at commit 4a7d684 with `npm run build`.",
+      "contracts": [
+        {
+          "address": "secret1lj23n74aan7nlgj6hfm45fh3gc7h2ctdplsw8y",
+          "new_code_id": "78"
+        }
+      ],
+      "admin_updates": []
+    }
+  ],
+  "metadata": "",
+  "deposit": "1000000000uscrt",
+  "title": "Raise the dSCRT manager fee ceiling to 15%",
+  "summary": "Migrate lst-core (secret1lj23n74aan7nlgj6hfm45fh3gc7h2ctdplsw8y) to code id 78. This raises the ceiling on the performance fee the manager may set, from 10% to 15%. It does not raise the fee, which stays at 7%. The migration writes only that one figure; the manager, treasury, validator-weight ceiling, exchange rate and every open withdrawal window are unaffected. Code hash 80edd69fe4d4bb651dd24e949df2b90b0e641a8d9dc5445497cd0d50c77e202b."
+}
