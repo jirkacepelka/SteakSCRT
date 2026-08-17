@@ -1,141 +1,194 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
-import { DENOM, fromMicro, getPermit, shortAddress } from "@/lib/chain";
-import { fetchScrtBalance, fetchTokenBalance } from "@/lib/protocol";
+import { fromMicro, getPermit, rateToNumber, shortAddress } from "@/lib/chain";
+import { fetchScrtBalance, fetchState, fetchTokenBalance } from "@/lib/protocol";
 
-import { Check, Close, Copy, Spinner } from "./Icon";
+import { Check, Copy, LogOut, Spinner } from "./Icon";
+import { Portal } from "./Portal";
 import { readable, useToast } from "./Toast";
 import { useWallet } from "./Wallet";
 
 /**
  * The account panel.
  *
- * What a wallet button should open: the address, what you hold, and the way out. The
- * dropdown it replaces had the address and a disconnect and nothing else, which meant the
- * one question people actually click a wallet to answer — how much have I got — was
- * answered nowhere.
+ * Floats beside the page rather than over it. You open this to check a balance while doing
+ * something else, and an overlay that dims the screen would say "deal with me first" —
+ * which an account panel has no business saying.
  *
- * SCRT is a public bank balance and loads on its own. dSCRT is private contract state and
- * needs a signature, so it is offered rather than taken: opening this panel must never
- * make a wallet ask for anything.
+ * What it holds: the address, what you have of each token, and the way out. No fiat
+ * figures anywhere. Quoting a dollar value means trusting a price feed this app has no
+ * other reason to call, and a wrong one is worse than none — so the position is denominated
+ * in SCRT, which is the unit the protocol actually reasons in.
+ *
+ * SCRT loads on its own because a bank balance is public. dSCRT is private contract state
+ * and waits behind a button: opening a panel must never make a wallet ask for a signature.
  */
-export function AccountDialog({ onClose }: { onClose: () => void }) {
-  const { address, disconnect } = useWallet();
+export function AccountDrawer({ onClose }: { onClose: () => void }) {
+  const { address, connection, disconnect } = useWallet();
   const toast = useToast();
+  const panel = useRef<HTMLDivElement>(null);
 
   const [scrt, setScrt] = useState<string | null>(null);
   const [dscrt, setDscrt] = useState<string | null>(null);
-  const [loadingDscrt, setLoadingDscrt] = useState(false);
+  const [rate, setRate] = useState(1);
+  const [revealing, setRevealing] = useState(false);
   const [copied, setCopied] = useState(false);
-  const { connection } = useWallet();
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
+    /*
+     * Close on a click elsewhere, without an overlay to catch it. A scrim would swallow
+     * that first click; this way it reaches whatever the user was aiming at, which is the
+     * whole point of the panel not blocking the page.
+     */
+    const onDown = (e: MouseEvent) => {
+      const target = e.target as Node;
+      if (panel.current && !panel.current.contains(target)) {
+        // The wallet button itself toggles, so let it handle its own click.
+        if (!(target instanceof Element) || !target.closest("[data-account-toggle]")) {
+          onClose();
+        }
+      }
+    };
     window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    window.addEventListener("mousedown", onDown);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("mousedown", onDown);
+    };
   }, [onClose]);
 
   useEffect(() => {
     if (!connection || !address) return;
-    void fetchScrtBalance(connection.client, address)
-      .then(setScrt)
+    void fetchScrtBalance(connection.client, address).then(setScrt).catch(() => undefined);
+    void fetchState()
+      .then((s) => setRate(rateToNumber(s.exchange_rate)))
       .catch(() => undefined);
   }, [connection, address]);
 
-  const revealDscrt = async () => {
+  const reveal = async () => {
     if (!connection || !address) return;
-    setLoadingDscrt(true);
+    setRevealing(true);
     try {
       setDscrt(await fetchTokenBalance(connection.client, await getPermit(address)));
     } catch (e) {
       toast.show("error", readable(e));
     } finally {
-      setLoadingDscrt(false);
+      setRevealing(false);
     }
   };
 
   if (!address) return null;
 
-  return (
-    <div className="scrim" onClick={onClose}>
-      <div
-        className="dialog"
-        role="dialog"
-        aria-modal="true"
-        aria-label="Account"
-        style={{ maxWidth: 400 }}
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="dialog-head">
-          <span className="pill pill--good">
-            <span className="dot" />
-            Connected
-          </span>
-          <button className="icon-btn" onClick={onClose} aria-label="Close">
-            <Close />
-          </button>
-        </div>
+  const totalScrt =
+    scrt !== null && dscrt !== null ? Number(scrt) + Number(dscrt) * rate : null;
 
-        <div className="dialog-body">
+  return (
+    <Portal>
+      <div className="drawer" ref={panel} role="dialog" aria-label="Account">
+        <div className="drawer-head">
           <button
-            className="btn btn--ghost"
-            style={{ justifyContent: "space-between", fontFamily: "var(--font-mono)" }}
+            className="addr"
             onClick={() => {
               void navigator.clipboard.writeText(address);
               setCopied(true);
               setTimeout(() => setCopied(false), 1500);
             }}
+            title="Copy address"
           >
-            <span style={{ fontSize: 13 }}>{shortAddress(address)}</span>
-            {copied ? <Check size={15} /> : <Copy size={15} />}
+            <img src="/brand/scrt.png" alt="" width={22} height={22} />
+            <span style={{ flex: 1, textAlign: "left" }}>{shortAddress(address)}</span>
+            {copied ? <Check size={14} /> : <Copy size={14} />}
           </button>
+          <button
+            className="icon-btn"
+            onClick={() => {
+              disconnect();
+              onClose();
+            }}
+            aria-label="Disconnect"
+            title="Disconnect"
+          >
+            <LogOut size={16} />
+          </button>
+        </div>
 
-          <div className="stack" style={{ gap: "var(--s-3)" }}>
-            <div className="row">
-              <span className="k">SCRT</span>
-              <span className="v num">
-                {scrt !== null ? fromMicro(scrt) : <span className="skel" style={{ width: 70, height: 14 }} />}
+        <div className="drawer-body">
+          <div>
+            <p className="stat-label" style={{ marginBottom: 4 }}>
+              Total
+            </p>
+            <div className="stat-value num">
+              {totalScrt !== null ? (
+                <>
+                  {fromMicro(totalScrt, 2)}
+                  <span className="stat-unit">SCRT</span>
+                </>
+              ) : scrt !== null ? (
+                <>
+                  {fromMicro(scrt, 2)}
+                  <span className="stat-unit">SCRT</span>
+                </>
+              ) : (
+                <span className="skel" style={{ width: 120, height: 24 }} />
+              )}
+            </div>
+            {totalScrt === null && scrt !== null && (
+              <p className="hint" style={{ marginTop: 4 }}>
+                Your staked position is not counted until you reveal it below.
+              </p>
+            )}
+          </div>
+
+          <div>
+            <p className="stat-label" style={{ marginBottom: "var(--s-2)" }}>
+              Holdings
+            </p>
+
+            <div className="holding">
+              <img src="/brand/scrt.png" alt="" width={30} height={30} />
+              <span className="holding-name">
+                <strong>SCRT</strong>
+                <span className="hint">Liquid, in your wallet</span>
+              </span>
+              <span className="holding-value">
+                <span className="num" style={{ fontWeight: 560 }}>
+                  {scrt !== null ? fromMicro(scrt) : <span className="skel" style={{ width: 60, height: 14 }} />}
+                </span>
               </span>
             </div>
-            <div className="row">
-              <span className="k">dSCRT</span>
-              <span className="v num">
+
+            <div className="holding">
+              <img src="/brand/scrt.png" alt="" width={30} height={30} />
+              <span className="holding-name">
+                <strong>dSCRT</strong>
+                <span className="hint">Staked, earning</span>
+              </span>
+              <span className="holding-value">
                 {dscrt !== null ? (
-                  fromMicro(dscrt)
+                  <>
+                    <span className="num" style={{ fontWeight: 560 }}>
+                      {fromMicro(dscrt)}
+                    </span>
+                    <span className="hint num">≈ {fromMicro(Number(dscrt) * rate, 2)} SCRT</span>
+                  </>
                 ) : (
-                  <button className="mini" onClick={revealDscrt} disabled={loadingDscrt}>
-                    {loadingDscrt ? <Spinner size={11} /> : null} Sign to reveal
+                  <button className="mini" onClick={reveal} disabled={revealing}>
+                    {revealing ? <Spinner size={11} /> : null} Reveal
                   </button>
                 )}
               </span>
             </div>
           </div>
 
-          <p className="hint">
-            Your dSCRT balance is private contract state. Reading it needs a signature —
-            free, and not a transaction — which is why it is not shown automatically.
-          </p>
-
-          <button
-            className="btn btn--ghost"
-            onClick={() => {
-              disconnect();
-              onClose();
-            }}
-          >
-            Disconnect
-          </button>
-
-          <p className="hint">
-            Drops this session and the cached permit from your browser. Keplr decides what it
-            shares with a site, so nothing here can revoke its access.
+          <p className="hint" style={{ marginTop: "auto" }}>
+            Your dSCRT balance is private contract state. Revealing it costs a signature,
+            not a transaction — and the signature stays in this browser.
           </p>
         </div>
       </div>
-    </div>
+    </Portal>
   );
 }
-
-export { DENOM };

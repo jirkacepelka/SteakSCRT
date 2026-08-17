@@ -12,7 +12,7 @@ import {
 
 import { connect, forgetPermit, shortAddress, type Connection } from "@/lib/chain";
 
-import { AccountDialog } from "./Account";
+import { AccountDrawer } from "./Account";
 import { Spinner, Wallet as WalletIcon } from "./Icon";
 import { useToast, readable } from "./Toast";
 
@@ -100,11 +100,16 @@ export function ConnectButton() {
 
   return (
     <>
-      <button className="btn btn--quiet btn--sm" onClick={() => setOpen(true)}>
+      <button
+        className="btn btn--quiet btn--sm"
+        data-account-toggle
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+      >
         <span className="dot" style={{ color: "var(--good)" }} />
         <span className="num">{shortAddress(address)}</span>
       </button>
-      {open && <AccountDialog onClose={() => setOpen(false)} />}
+      {open && <AccountDrawer onClose={() => setOpen(false)} />}
     </>
   );
 }

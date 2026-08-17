@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { DEPLOYMENT, shortAddress } from "@/lib/chain";
 import {
@@ -15,6 +15,7 @@ import {
 } from "@/lib/endpoint";
 
 import { Alert, Check, Close, Copy, Moon, Spinner, Sun } from "./Icon";
+import { Portal } from "./Portal";
 import { useTheme } from "./Theme";
 
 /**
@@ -35,6 +36,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
   const [known, setKnown] = useState<string[]>([]);
   const [draft, setDraft] = useState("");
   const [health, setHealth] = useState<Record<string, EndpointHealth | "checking">>({});
+  const panel = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     setCurrent(lcdUrl());
@@ -43,8 +45,20 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
+    // No scrim to catch an outside click, so listen for one directly — and let it through
+    // to whatever it was aimed at, which is the point of not blocking the page.
+    const onDown = (e: MouseEvent) => {
+      const target = e.target as Node;
+      if (!panel.current || panel.current.contains(target)) return;
+      if (target instanceof Element && target.closest('[aria-label="Settings"]')) return;
+      onClose();
+    };
     window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    window.addEventListener("mousedown", onDown);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("mousedown", onDown);
+    };
   }, [onClose]);
 
   const check = async (url: string) => {
@@ -85,22 +99,16 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
   const draftError = health.__draft;
 
   return (
-    <div className="scrim" onClick={onClose}>
-      <div
-        className="dialog"
-        role="dialog"
-        aria-modal="true"
-        aria-label="Settings"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="dialog-head">
+    <Portal>
+      <div className="drawer" ref={panel} role="dialog" aria-label="Settings">
+        <div className="drawer-head">
           <h2 className="h2">Settings</h2>
           <button className="icon-btn" onClick={onClose} aria-label="Close settings">
             <Close />
           </button>
         </div>
 
-        <div className="dialog-body">
+        <div className="drawer-body">
           <section className="stack" style={{ gap: "var(--s-3)" }}>
             <div className="row">
               <span className="k">Appearance</span>
@@ -184,7 +192,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
           </section>
         </div>
       </div>
-    </div>
+    </Portal>
   );
 }
 

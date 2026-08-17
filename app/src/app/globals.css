@@ -75,6 +75,7 @@
 
   --shell: 1120px;
   --card: 480px;
+  --nav-h: 63px;
 
   --font: var(--font-inter), ui-sans-serif, system-ui, -apple-system, sans-serif;
   --font-display: var(--font-geist), var(--font);
@@ -1077,6 +1078,130 @@ code {
     right: var(--s-4);
     bottom: var(--s-4);
     max-width: none;
+  }
+}
+
+/* ---------------------------------------------------------------- drawer */
+
+/*
+ * A panel that floats beside the page rather than over it.
+ *
+ * No scrim, deliberately. An overlay that dims the screen says "deal with me first", and
+ * an account panel has no business saying that — you open it to check a balance while
+ * doing something else, and the something else has to stay usable. It also sits below the
+ * bar, so navigation keeps working with the panel open.
+ */
+.drawer {
+  position: fixed;
+  top: calc(var(--nav-h) + var(--s-3));
+  right: var(--s-3);
+  bottom: var(--s-3);
+  z-index: 40;
+  width: min(360px, calc(100vw - var(--s-6)));
+  display: flex;
+  flex-direction: column;
+  background: var(--overlay);
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-lg);
+  animation: drawer-in var(--med) var(--ease);
+}
+
+@keyframes drawer-in {
+  from {
+    transform: translate(8px, -4px);
+    opacity: 0;
+  }
+}
+
+.drawer-head {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  padding: var(--s-4);
+  border-bottom: 1px solid var(--line);
+}
+
+.drawer-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: var(--s-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-5);
+}
+
+/* The address, as a chip you can lift. */
+.addr {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-2);
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  color: var(--ink);
+  font-family: var(--font-mono);
+  font-size: 13px;
+  padding: 4px 6px;
+  border-radius: var(--r-xs);
+  cursor: pointer;
+  transition: background var(--fast) var(--ease);
+}
+
+.addr:hover {
+  background: var(--sunken);
+}
+
+.addr img {
+  width: 22px;
+  height: 22px;
+  border-radius: var(--r-full);
+  flex: none;
+}
+
+/* A holding: mark, name, and what you have of it. */
+.holding {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  padding: var(--s-2) 0;
+}
+
+.holding img {
+  width: 30px;
+  height: 30px;
+  border-radius: var(--r-full);
+  flex: none;
+}
+
+.holding-name {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.holding-name strong {
+  font-size: 14px;
+  font-weight: 560;
+}
+
+.holding-value {
+  text-align: right;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  align-items: flex-end;
+}
+
+@media (max-width: 560px) {
+  .drawer {
+    top: auto;
+    left: var(--s-3);
+    width: auto;
+    max-height: 78vh;
   }
 }
 

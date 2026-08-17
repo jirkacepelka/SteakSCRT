@@ -130,6 +130,12 @@ export const Wallet = (p: Props) => (
   </Svg>
 );
 
+export const LogOut = (p: Props) => (
+  <Svg {...p}>
+    <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9" />
+  </Svg>
+);
+
 export const Clock = (p: Props) => (
   <Svg {...p}>
     <circle cx="12" cy="12" r="9" />
