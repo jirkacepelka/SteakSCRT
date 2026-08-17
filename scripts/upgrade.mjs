@@ -181,6 +181,39 @@ async function main() {
         "governance vote and the migration is relayed by whoever the proposal names.",
     );
   }
+  /*
+   * Stop before spending anything once upgrades belong to the network.
+   *
+   * `set-contract-governance` does not remove the admin — it leaves the key in place and
+   * adds a requirement that a proposal name the code id first. So the missing-admin check
+   * above never fires, and without this one the script would upload a fresh wasm, pay for
+   * it, and only then be refused at the migration with `requires governance approval for
+   * migration`. The admin is a relay now, and this is where that stops being an abstraction.
+   */
+  const governed = Boolean(info.contract_info?.require_governance);
+  if (governed && !dryRun) {
+    throw new Error(
+      [
+        "Upgrades on this contract belong to the network.",
+        "",
+        "`set-contract-governance` has been called, so the chain will only migrate this",
+        "contract to a code id that a passed MsgContractGovernanceProposal names. Your",
+        "admin key can relay that migration and nothing else — it cannot choose the code.",
+        "",
+        "Nothing has been uploaded. To upgrade:",
+        "  1. `--dry-run` — uploads the new code and stops, printing its id.",
+        "  2. Pass a governance proposal naming this contract and that code id.",
+        "  3. Migrate with the admin key once the proposal has passed.",
+      ].join("\n"),
+    );
+  }
+  // `--dry-run` is allowed through: uploading is step 1 of that path, and uploaded code
+  // does nothing until a contract is pointed at it.
+  if (governed) console.log("Upgrades require a governance proposal. Uploading only.\n");
+
+  // Checked after the governance question, not before. Once the network owns upgrades,
+  // "this contract is governed" is the more useful thing to be told — and it is true
+  // whoever happens to be holding the key.
   if (admin !== wallet.address) {
     throw new Error(`Contract admin is ${admin}, but you are signing as ${wallet.address}.`);
   }
