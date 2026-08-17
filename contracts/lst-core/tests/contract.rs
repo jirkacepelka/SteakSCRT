@@ -1970,6 +1970,53 @@ fn compounding_restakes_rewards_and_takes_the_fee_in_shares() {
 }
 
 #[test]
+fn the_fee_does_not_depend_on_whether_anybody_synced_first() {
+    // The bug this pins: the fee used to be priced against the cached totals, and the
+    // cache holds `pending_rewards` whenever somebody has synced recently — so the same
+    // rewards were counted twice in the denominator and the treasury was quietly paid
+    // about half. Running a sync first is free and permissionless, which made the
+    // protocol's own fee depend on the order two strangers pressed two buttons.
+    let fee_after = |sync_first: bool| {
+        let (mut deps, env) = bootstrapped();
+        set_delegation(&mut deps, &env, V1, SEED, 1_000_000);
+
+        if sync_first {
+            execute(
+                deps.as_mut(),
+                env.clone(),
+                mock_info(USER, &[]),
+                ExecuteMsg::Sync { limit: Some(10) },
+            )
+            .unwrap();
+        }
+
+        let res = execute(
+            deps.as_mut(),
+            env.clone(),
+            mock_info(USER, &[]),
+            ExecuteMsg::Compound { limit: Some(10) },
+        )
+        .unwrap();
+
+        match from_binary(&res.data.unwrap()).unwrap() {
+            ExecuteAnswer::Compound {
+                fee_shares_minted, ..
+            } => fee_shares_minted,
+            other => panic!("unexpected answer {other:?}"),
+        }
+    };
+
+    let alone = fee_after(false);
+    let after_sync = fee_after(true);
+
+    assert_eq!(
+        alone, after_sync,
+        "the fee moved because somebody ran a sync first: {alone} against {after_sync}"
+    );
+    assert_eq!(alone, Uint128::new(73_260), "and it is still the right figure");
+}
+
+#[test]
 fn compounding_raises_the_exchange_rate_for_holders() {
     let (mut deps, env) = bootstrapped();
     set_delegation(&mut deps, &env, V1, SEED, 1_000_000);

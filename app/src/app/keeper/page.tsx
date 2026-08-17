@@ -18,7 +18,7 @@ import {
   type ProtocolState,
   type UnbondWindow,
 } from "@/lib/protocol";
-import { assess, type UpkeepItem } from "@/lib/upkeep";
+import { assess, liveRewards, type UpkeepItem } from "@/lib/upkeep";
 
 /**
  * Run the protocol's upkeep from a browser.
@@ -43,16 +43,23 @@ export default function KeeperPage() {
   const [state, setState] = useState<ProtocolState | null>(null);
   const [config, setConfig] = useState<Config | null>(null);
   const [windows, setWindows] = useState<UnbondWindow[]>([]);
+  const [rewards, setRewards] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [tick, setTick] = useState(0);
 
   const refresh = useCallback(async () => {
     try {
-      const [s, c, w] = await Promise.all([fetchState(), fetchConfig(), fetchWindows()]);
+      const [s, c, w, r] = await Promise.all([
+        fetchState(),
+        fetchConfig(),
+        fetchWindows(),
+        liveRewards(),
+      ]);
       setState(s);
       setConfig(c);
       setWindows(w);
+      setRewards(r);
     } catch (e) {
       toast.show("error", readable(e));
     } finally {
@@ -70,9 +77,9 @@ export default function KeeperPage() {
   }, [refresh]);
 
   const items = useMemo(
-    () => assess(state, config, windows),
+    () => assess(state, config, windows, rewards),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [state, config, windows, tick],
+    [state, config, windows, rewards, tick],
   );
 
   const due = items.filter((i) => i.due);

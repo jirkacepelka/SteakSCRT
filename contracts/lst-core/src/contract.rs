@@ -946,6 +946,32 @@ fn execute_compound(
     // compounding pulls the set toward its target weights instead of entrenching drift.
     let mut fee_shares = Uint128::zero();
     if !harvested.is_zero() {
+        /*
+         * Price the fee against the pool *without* the rewards being harvested, counted
+         * once.
+         *
+         * The obvious source for that — the totals cached at the top — is wrong, and
+         * wrong in a way that hides: `pending_rewards` in the cache already holds these
+         * rewards whenever anybody synced recently, so adding them again inside
+         * `fee_shares_for_rewards` inflates the denominator and quietly underpays the
+         * treasury. Worse, it underpays *conditionally*: run a sync first and the fee
+         * halves, run compound alone and it is correct. A fee that depends on the order
+         * somebody pressed two permissionless buttons is not a fee.
+         *
+         * The loop above has just re-read every processed validator and zeroed its
+         * rewards, so the set itself is the honest answer: bonded as the chain reports it,
+         * plus only the rewards this sweep is not taking.
+         */
+        let assets_before_harvest = PoolTotals {
+            bonded: validators::total_bonded(&set),
+            pending_rewards: set
+                .iter()
+                .fold(Uint128::zero(), |acc, v| acc + v.pending_rewards),
+            liquid: pool_before.liquid,
+            owed_backed: totals_before.owed_backed(),
+            supply: totals_before.total_supply,
+        };
+
         let target = validators::select_for_delegation(&set, harvested)?;
         set[target].bonded += harvested;
 
@@ -955,14 +981,12 @@ fn execute_compound(
             harvested,
         ));
 
-        // The fee is taken as freshly minted shares rather than withdrawn SCRT: the whole
-        // reward stays staked and no bank transfer is needed per cycle. Minting must be
-        // priced against the pool *before* the rewards land, which is why `pool_before`
-        // is captured at the top.
+        // Taken as freshly minted shares rather than withdrawn SCRT: the whole reward
+        // stays staked and no bank transfer is needed per cycle.
         fee_shares = math::fee_shares_for_rewards(
             harvested,
             config.params.performance_fee_bps,
-            &pool_before,
+            &assets_before_harvest,
         )?;
 
         if !fee_shares.is_zero() {

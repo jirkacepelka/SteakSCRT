@@ -8,7 +8,33 @@
  * Everything here is judged from public state. No permit, no wallet, nothing private.
  */
 
+import { DEPLOYMENT } from "./chain";
+import { lcdUrl } from "./endpoint";
 import type { Config, ProtocolState, UnbondWindow, UpkeepTask } from "./protocol";
+
+/**
+ * Rewards sitting at the validators right now.
+ *
+ * The contract's own `pending_rewards` is a cache, refreshed only by a sync or a compound
+ * — so on a protocol nobody has touched for an hour it reads zero while a real balance
+ * accrues, and this page would say "not worth the gas" about money that is very much
+ * there. The distribution module knows the live figure and will tell anyone who asks.
+ */
+export async function liveRewards(): Promise<number | null> {
+  try {
+    const res = await fetch(
+      `${lcdUrl()}/cosmos/distribution/v1beta1/delegators/${DEPLOYMENT.core.address}/rewards`,
+    );
+    if (!res.ok) return null;
+
+    const body = (await res.json()) as { total?: { denom: string; amount: string }[] };
+    const total = (body.total ?? []).find((c) => c.denom === "uscrt")?.amount;
+    // The distribution module reports fractional uscrt; only whole ones are withdrawable.
+    return total === undefined ? null : Math.floor(Number(total));
+  } catch {
+    return null;
+  }
+}
 
 export interface UpkeepItem {
   task: UpkeepTask;
@@ -27,6 +53,8 @@ export function assess(
   state: ProtocolState | null,
   config: Config | null,
   windows: UnbondWindow[],
+  /** Live figure from the distribution module; the contract's cache is used if absent. */
+  rewardsNow: number | null = null,
   now = Math.floor(Date.now() / 1000),
 ): UpkeepItem[] {
   if (!state || !config) return [];
@@ -36,7 +64,7 @@ export function assess(
 
   const ripe = windows.filter((w) => w.state === "unbonding" && now >= w.matures_at);
 
-  const rewards = Number(state.pending_rewards);
+  const rewards = rewardsNow ?? Number(state.pending_rewards);
   const age = now - state.last_sync_time;
 
   return [
