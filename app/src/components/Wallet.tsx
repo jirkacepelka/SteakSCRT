@@ -12,7 +12,8 @@ import {
 
 import { connect, forgetPermit, shortAddress, type Connection } from "@/lib/chain";
 
-import { Check, Copy, Spinner, Wallet as WalletIcon } from "./Icon";
+import { AccountDialog } from "./Account";
+import { Spinner, Wallet as WalletIcon } from "./Icon";
 import { useToast, readable } from "./Toast";
 
 interface WalletState {
@@ -85,9 +86,8 @@ export function useWallet(): WalletState {
 }
 
 export function ConnectButton() {
-  const { address, connecting, connectWallet, disconnect } = useWallet();
+  const { address, connecting, connectWallet } = useWallet();
   const [open, setOpen] = useState(false);
-  const [copied, setCopied] = useState(false);
 
   if (!address) {
     return (
@@ -99,66 +99,12 @@ export function ConnectButton() {
   }
 
   return (
-    <div style={{ position: "relative" }}>
-      <button
-        className="btn btn--quiet btn--sm"
-        onClick={() => setOpen((v) => !v)}
-        aria-expanded={open}
-      >
+    <>
+      <button className="btn btn--quiet btn--sm" onClick={() => setOpen(true)}>
         <span className="dot" style={{ color: "var(--good)" }} />
         <span className="num">{shortAddress(address)}</span>
       </button>
-
-      {open && (
-        <>
-          <div
-            style={{ position: "fixed", inset: 0, zIndex: 40 }}
-            onClick={() => setOpen(false)}
-          />
-          <div
-            className="card"
-            style={{
-              position: "absolute",
-              right: 0,
-              top: "calc(100% + 8px)",
-              zIndex: 41,
-              padding: "var(--s-3)",
-              width: 260,
-              display: "flex",
-              flexDirection: "column",
-              gap: "var(--s-2)",
-            }}
-          >
-            <button
-              className="btn btn--ghost btn--sm"
-              style={{ justifyContent: "space-between" }}
-              onClick={() => {
-                void navigator.clipboard.writeText(address);
-                setCopied(true);
-                setTimeout(() => setCopied(false), 1500);
-              }}
-            >
-              <span className="num" style={{ fontSize: 12.5 }}>
-                {shortAddress(address)}
-              </span>
-              {copied ? <Check size={14} /> : <Copy size={14} />}
-            </button>
-            <button
-              className="btn btn--ghost btn--sm"
-              onClick={() => {
-                disconnect();
-                setOpen(false);
-              }}
-            >
-              Forget this session
-            </button>
-            <p className="hint" style={{ margin: 0 }}>
-              Drops the cached permit from this browser. Keplr decides what it shares with a
-              site, so this cannot revoke its access.
-            </p>
-          </div>
-        </>
-      )}
-    </div>
+      {open && <AccountDialog onClose={() => setOpen(false)} />}
+    </>
   );
 }

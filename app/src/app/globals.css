@@ -298,12 +298,12 @@ code {
 }
 
 .nav-inner {
-  max-width: var(--shell);
-  margin: 0 auto;
-  padding: var(--s-3) var(--s-5);
+  /* Full width on purpose: the bar is chrome, and chrome belongs to the window rather
+     than to the column of content underneath it. */
+  padding: var(--s-3) var(--s-6);
   display: flex;
   align-items: center;
-  gap: var(--s-5);
+  gap: var(--s-6);
 }
 
 .brand {
@@ -332,35 +332,36 @@ code {
   top: -0.65em;
 }
 
+/*
+ * Navigation as text.
+ *
+ * A pill track drew a box around three words and made the bar look like a control panel.
+ * Where you are is legible from weight and colour alone, which is how a page usually says
+ * it, and leaves the bar quiet enough to be ignored.
+ */
 .tabs {
   display: flex;
   align-items: center;
-  gap: var(--s-1);
-  padding: var(--s-1);
-  background: var(--sunken);
-  border: 1px solid var(--line);
-  border-radius: var(--r-full);
+  gap: var(--s-6);
 }
 
 .tab {
-  padding: 7px 15px;
-  border-radius: var(--r-full);
-  font-size: 13.5px;
-  font-weight: 540;
-  color: var(--ink-2);
+  font-size: 14.5px;
+  font-weight: 520;
+  color: var(--ink-3);
   text-decoration: none;
   white-space: nowrap;
-  transition: color var(--fast) var(--ease), background var(--fast) var(--ease);
+  padding: var(--s-2) 0;
+  transition: color var(--fast) var(--ease);
 }
 
 .tab:hover {
-  color: var(--ink);
+  color: var(--ink-2);
 }
 
 .tab[aria-current="page"] {
-  background: var(--raised);
   color: var(--ink);
-  box-shadow: var(--shadow-sm);
+  font-weight: 580;
 }
 
 .nav-end {
@@ -373,7 +374,7 @@ code {
 @media (max-width: 860px) {
   .nav-inner {
     flex-wrap: wrap;
-    gap: var(--s-2) var(--s-3);
+    gap: var(--s-2) var(--s-5);
     padding: var(--s-2) var(--s-4);
   }
   .tabs {
@@ -395,6 +396,21 @@ code {
  * spend above the one card the screen is for. The dot alone carries the warning; the full
  * chain id is a tap away in settings.
  */
+/* The chain is a fact about the session, not a badge. */
+.net {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12.5px;
+  font-weight: 520;
+  color: var(--ink-3);
+  white-space: nowrap;
+}
+
+.net .dot {
+  background: var(--warn);
+}
+
 @media (max-width: 560px) {
   .nav-inner {
     padding: 6px var(--s-4);
@@ -406,11 +422,8 @@ code {
     width: 22px;
     height: 22px;
   }
-  .pill--net span:not(.dot) {
+  .net span:not(.dot) {
     display: none;
-  }
-  .pill--net {
-    padding: 5px 7px;
   }
 }
 
@@ -1270,12 +1283,10 @@ pre.payload {
 
 .footer {
   border-top: 1px solid var(--line);
-  padding: var(--s-5);
+  padding: var(--s-5) var(--s-6);
 }
 
 .footer-inner {
-  max-width: var(--shell);
-  margin: 0 auto;
   display: flex;
   align-items: center;
   justify-content: space-between;

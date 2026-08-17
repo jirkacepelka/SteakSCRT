@@ -22,7 +22,7 @@ function NetworkPill() {
   const isMainnet = DEPLOYMENT.chainId === "secret-4";
   if (isMainnet) return null;
   return (
-    <span className="pill pill--warn pill--net" title={DEPLOYMENT.chainId}>
+    <span className="net" title={`Connected to ${DEPLOYMENT.chainId}`}>
       <span className="dot" />
       <span>{DEPLOYMENT.chainId}</span>
     </span>
