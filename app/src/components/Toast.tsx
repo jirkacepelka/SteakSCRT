@@ -125,7 +125,7 @@ export function useToast(): ToastApi {
  * gas.
  */
 export function readable(error: unknown): string {
-  const raw = error instanceof Error ? error.message : String(error);
+  const raw = describe(error);
 
   if (/request rejected|user denied|rejected by the user/i.test(raw)) {
     return "You rejected the request in your wallet.";
@@ -159,4 +159,34 @@ export function readable(error: unknown): string {
   // rather than the framing.
   const tail = raw.split("failed to execute message").pop() ?? raw;
   return tail.length > 220 ? `${tail.slice(0, 220)}…` : tail.trim();
+}
+
+/**
+ * Get a string out of whatever was thrown.
+ *
+ * `String(error)` on a plain object gives `[object Object]`, and that is what a user saw:
+ * a toast saying nothing at all. Not everything that reaches here is an `Error` — secret.js
+ * rejects with bare objects, and a failed decryption throws something with neither a name
+ * nor a message — so this digs for the fields those things actually carry before falling
+ * back to serialising the whole thing, which is ugly but is never nothing.
+ */
+function describe(error: unknown): string {
+  if (typeof error === "string") return error;
+  if (error instanceof Error) return error.message;
+
+  if (error && typeof error === "object") {
+    const bag = error as Record<string, unknown>;
+    for (const key of ["message", "rawLog", "raw_log", "error", "reason", "details"]) {
+      const value = bag[key];
+      if (typeof value === "string" && value.trim()) return value;
+    }
+    try {
+      const json = JSON.stringify(error);
+      if (json && json !== "{}") return json;
+    } catch {
+      // Circular, or something exotic. Fall through.
+    }
+  }
+
+  return "Something went wrong, and whatever threw it said nothing useful.";
 }

@@ -45,6 +45,7 @@ export default function KeeperPage() {
   const [windows, setWindows] = useState<UnbondWindow[]>([]);
   const [rewards, setRewards] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
+  const [failed, setFailed] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [tick, setTick] = useState(0);
 
@@ -60,8 +61,11 @@ export default function KeeperPage() {
       setConfig(c);
       setWindows(w);
       setRewards(r);
+      setFailed(null);
     } catch (e) {
-      toast.show("error", readable(e));
+      // Saying "nothing is due" here would be a lie — the page does not know. The one
+      // thing it must never do is talk somebody out of running upkeep that is overdue.
+      setFailed(readable(e));
     } finally {
       setLoading(false);
     }
@@ -128,6 +132,27 @@ export default function KeeperPage() {
           <div className="panel empty">
             <Spinner />
             <p className="hint">Reading the protocol…</p>
+          </div>
+        ) : failed ? (
+          <div className="card" style={{ padding: "var(--s-5)" }}>
+            <div className="notice notice--bad">
+              <Alert size={16} />
+              <span>{failed}</span>
+            </div>
+            <p className="prose" style={{ marginTop: "var(--s-4)" }}>
+              Nothing could be read from the contract, so this page cannot say whether any
+              upkeep is due. It is not saying there is none.
+            </p>
+            <button
+              className="btn btn--block"
+              style={{ marginTop: "var(--s-4)" }}
+              onClick={() => {
+                setLoading(true);
+                void refresh();
+              }}
+            >
+              Try again
+            </button>
           </div>
         ) : (
           <>
