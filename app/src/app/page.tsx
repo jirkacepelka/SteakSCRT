@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { ChevronDown, Clock, Info, Spinner } from "@/components/Icon";
 import { readable, useToast } from "@/components/Toast";
+import { TokenIcon } from "@/components/TokenIcon";
 import { Unconfigured } from "@/components/Unconfigured";
 import { useWallet } from "@/components/Wallet";
 import {
@@ -228,7 +229,7 @@ export default function StakePage() {
                 onChange={(e) => setAmount(e.target.value.replace(/[^\d.]/g, "").slice(0, 20))}
               />
               <span className="token">
-                <img src="/brand/scrt.png" alt="" width={24} height={24} />
+                <TokenIcon symbol={symbol} size={24} />
                 {symbol}
               </span>
             </div>
@@ -296,27 +297,24 @@ export default function StakePage() {
                   {config ? `${config.params.performance_fee_bps / 100}%` : <Skeleton w={38} />}
                 </span>
               </div>
-              <div className="row">
-                <span className="k">Taken from</span>
-                <span className="v">Staking rewards, never principal</span>
-              </div>
-              <div className="row">
-                <span className="k">Withdrawal wait</span>
-                <span className="v">
-                  {config
-                    ? `${Math.round(config.params.unbonding_period_secs / 86_400)}–${Math.round(
-                        (config.params.unbonding_period_secs + config.params.unbond_window_secs) /
-                          86_400,
-                      )} days`
-                    : <Skeleton w={60} />}
-                </span>
-              </div>
-              <div className="row">
-                <span className="k">Protocol holds</span>
-                <span className="v num">
-                  {state ? `${fromMicro(totalHeld(state), 0)} SCRT` : <Skeleton w={70} />}
-                </span>
-              </div>
+              {/*
+                * Only where it changes a decision. Staking has nothing to wait for, so the
+                * unbonding figure there is trivia; on the way out it is the single thing
+                * most likely to surprise somebody, and it belongs in front of them.
+                */}
+              {mode === "unstake" && (
+                <div className="row">
+                  <span className="k">Withdrawal wait</span>
+                  <span className="v">
+                    {config
+                      ? `${Math.round(config.params.unbonding_period_secs / 86_400)}–${Math.round(
+                          (config.params.unbonding_period_secs + config.params.unbond_window_secs) /
+                            86_400,
+                        )} days`
+                      : <Skeleton w={60} />}
+                  </span>
+                </div>
+              )}
             </div>
           </details>
 
@@ -348,12 +346,6 @@ export default function StakePage() {
         </p>
       </div>
     </div>
-  );
-}
-
-function totalHeld(s: ProtocolState): number {
-  return (
-    Number(s.total_bonded) + Number(s.pending_rewards) + Number(s.liquid_unallocated)
   );
 }
 

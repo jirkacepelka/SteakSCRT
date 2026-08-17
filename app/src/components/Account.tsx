@@ -8,6 +8,7 @@ import { fetchScrtBalance, fetchState, fetchTokenBalance } from "@/lib/protocol"
 import { ArrowRight, Check, Copy, LogOut, Settings, Spinner } from "./Icon";
 import { Portal } from "./Portal";
 import { SettingsBody } from "./Settings";
+import { TokenIcon } from "./TokenIcon";
 import { readable, useToast } from "./Toast";
 import { useWallet } from "./Wallet";
 
@@ -178,7 +179,7 @@ export function AccountDrawer({ onClose }: { onClose: () => void }) {
             </p>
 
             <div className="holding">
-              <img src="/brand/scrt.png" alt="" width={30} height={30} />
+              <TokenIcon symbol="SCRT" size={30} />
               <span className="holding-name">
                 <strong>SCRT</strong>
                 <span className="hint">Liquid, in your wallet</span>
@@ -191,7 +192,7 @@ export function AccountDrawer({ onClose }: { onClose: () => void }) {
             </div>
 
             <div className="holding">
-              <img src="/brand/scrt.png" alt="" width={30} height={30} />
+              <TokenIcon symbol="dSCRT" size={30} />
               <span className="holding-name">
                 <strong>dSCRT</strong>
                 <span className="hint">Staked, earning</span>
