@@ -24,7 +24,7 @@
  * migration relayed by the admin the proposal names.
  */
 
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -244,7 +244,6 @@ async function main() {
   deployment.core.codeHash = next.codeHash;
   deployment.upgradedAt = new Date().toISOString();
 
-  const { writeFileSync, existsSync, readFileSync } = await import("node:fs");
   const path = join(ROOT, "deploy", `${name}.json`);
   writeFileSync(path, `${JSON.stringify(deployment, null, 2)}\n`);
   console.log(`\nWrote ${path}`);
