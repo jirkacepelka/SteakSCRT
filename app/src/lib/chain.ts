@@ -74,6 +74,25 @@ function keplr() {
   return w.keplr;
 }
 
+/**
+ * Wait for the extension to inject itself.
+ *
+ * `window.keplr` is not there when a script first runs — the extension puts it on the page
+ * during load — so anything that reaches for it on mount finds nothing and concludes the
+ * wallet is missing. That race is why a reload used to look like a disconnection.
+ */
+export async function waitForKeplr(timeoutMs = 3_000): Promise<void> {
+  const w = window as unknown as KeplrWindow;
+  if (w.keplr) return;
+
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, 50));
+    if (w.keplr) return;
+  }
+  throw new Error("Keplr was not found. Install the extension and reload.");
+}
+
 export interface Connection {
   address: string;
   client: SecretNetworkClient;
@@ -177,6 +196,37 @@ export async function getPermit(address: string): Promise<Permit> {
 
 export function forgetPermit(address: string) {
   localStorage.removeItem(`${PERMIT_STORAGE_KEY}.${address}`);
+}
+
+/** Whether a permit for this address is already signed, so reading needs no signature. */
+export function hasPermit(address: string): boolean {
+  return localStorage.getItem(`${PERMIT_STORAGE_KEY}.${address}`) !== null;
+}
+
+// ---- remembering that the user connected ----
+
+/*
+ * A reload is not a disconnection, and the app should stop treating it as one.
+ *
+ * Nothing secret is kept here — only the fact that this browser has connected before, which
+ * Keplr knows anyway, because approving a site is a decision the extension stores itself.
+ * Without the flag the app cannot tell a returning user from a first-time visitor, and
+ * calling `enable` on a first-time visitor throws an approval dialog at somebody who only
+ * refreshed a page. With it, the reconnection is silent, which is what the user already
+ * expected to happen.
+ */
+const SESSION_KEY = "secret-lst.connected";
+
+export function rememberConnection(address: string) {
+  localStorage.setItem(SESSION_KEY, address);
+}
+
+export function forgetConnection() {
+  localStorage.removeItem(SESSION_KEY);
+}
+
+export function wasConnected(): boolean {
+  return typeof window !== "undefined" && localStorage.getItem(SESSION_KEY) !== null;
 }
 
 /**

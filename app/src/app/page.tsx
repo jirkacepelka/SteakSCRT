@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { ChevronDown, Clock, Info, Spinner } from "@/components/Icon";
 import { readable, useToast } from "@/components/Toast";
@@ -11,6 +11,7 @@ import {
   CONFIGURED,
   fromMicro,
   getPermit,
+  hasPermit,
   rateToNumber,
   toMicro,
   untilFrom,
@@ -120,14 +121,34 @@ export default function StakePage() {
     };
   }, [config, openWindow]);
 
-  const loadClaims = useCallback(async () => {
+  /** `quiet` is the automatic attempt — see the same argument on the account panel. */
+  const loadClaims = useCallback(
+    async (quiet = false) => {
+      if (!connection || !address) return;
+      try {
+        setClaims(await fetchPendingClaims(connection.client, await getPermit(address)));
+      } catch (e) {
+        if (!quiet) toast.show("error", readable(e));
+      }
+    },
+    [connection, address, toast],
+  );
+
+  /*
+   * Load the withdrawal list unasked, once a permit exists.
+   *
+   * The button behind this said "Sign permit", which stopped being true the moment one was
+   * cached: it signed nothing and prompted nothing, it just made the user click to see
+   * their own queue again after every reload.
+   */
+  const autoLoaded = useRef<string | null>(null);
+  useEffect(() => {
     if (!connection || !address) return;
-    try {
-      setClaims(await fetchPendingClaims(connection.client, await getPermit(address)));
-    } catch (e) {
-      toast.show("error", readable(e));
-    }
-  }, [connection, address, toast]);
+    if (!hasPermit(address)) return;
+    if (autoLoaded.current === address) return;
+    autoLoaded.current = address;
+    void loadClaims(true);
+  }, [connection, address, loadClaims]);
 
   const submit = async () => {
     if (!connection) return void connectWallet();
@@ -332,9 +353,10 @@ export default function StakePage() {
         {mode === "unstake" && (
           <Withdrawals
             connected={Boolean(connection)}
+            signed={Boolean(address) && hasPermit(address as string)}
             claims={claims}
             busy={busy}
-            onLoad={loadClaims}
+            onLoad={() => loadClaims()}
             onClaim={claim}
           />
         )}
@@ -361,12 +383,15 @@ function Skeleton({ w }: { w: number }) {
  */
 function Withdrawals({
   connected,
+  signed,
   claims,
   busy,
   onLoad,
   onClaim,
 }: {
   connected: boolean;
+  /** A permit is already cached, so the button ahead asks for no signature. */
+  signed: boolean;
   claims: PendingClaims | null;
   busy: boolean;
   onLoad: () => Promise<void>;
@@ -381,11 +406,18 @@ function Withdrawals({
           <div>
             <h3 className="h3">Your withdrawals</h3>
             <p className="hint" style={{ marginTop: 2 }}>
-              Private contract state. One signature covers the whole app and costs nothing.
+              {signed
+                ? "Private contract state. Nothing loaded — try again."
+                : "Private contract state. One signature covers the whole app and costs nothing."}
             </p>
           </div>
+          {/*
+            * The label has to tell the truth about what the click does. With a permit
+            * already cached it signs nothing and prompts nothing, so calling it "Sign
+            * permit" would be asking for a signature that will never be requested.
+            */}
           <button className="btn btn--quiet btn--sm" onClick={onLoad} disabled={busy}>
-            Sign permit
+            {signed ? "Retry" : "Sign permit"}
           </button>
         </div>
       </div>

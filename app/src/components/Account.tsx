@@ -1,8 +1,8 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
-import { fromMicro, getPermit, rateToNumber, shortAddress } from "@/lib/chain";
+import { fromMicro, getPermit, hasPermit, rateToNumber, shortAddress } from "@/lib/chain";
 import { fetchScrtBalance, fetchState, fetchTokenBalance } from "@/lib/protocol";
 
 import { ArrowRight, Check, Copy, LogOut, Settings, Spinner } from "./Icon";
@@ -24,8 +24,10 @@ import { useWallet } from "./Wallet";
  * other reason to call, and a wrong one is worse than none — so the position is denominated
  * in SCRT, which is the unit the protocol actually reasons in.
  *
- * SCRT loads on its own because a bank balance is public. dSCRT is private contract state
- * and waits behind a button: opening a panel must never make a wallet ask for a signature.
+ * SCRT loads on its own because a bank balance is public. dSCRT is private contract state,
+ * so it waits behind a button until a permit exists — opening a panel must never make a
+ * wallet ask for a signature. Once one is signed the button has nothing left to protect
+ * against, and the balance simply loads.
  */
 export function AccountDrawer({ onClose }: { onClose: () => void }) {
   const { address, connection, disconnect } = useWallet();
@@ -73,17 +75,48 @@ export function AccountDrawer({ onClose }: { onClose: () => void }) {
       .catch(() => undefined);
   }, [connection, address]);
 
-  const reveal = async () => {
+  /**
+   * Read the private balance.
+   *
+   * `quiet` is for the automatic attempt. A failure the user asked for is news; the same
+   * failure on an attempt they never made is noise, and it would arrive as an error toast
+   * over whatever they were actually doing. When the quiet path fails it leaves the button
+   * exactly where it was, which is both the honest signal and the way to retry.
+   */
+  const reveal = useCallback(
+    async (quiet = false) => {
+      if (!connection || !address) return;
+      setRevealing(true);
+      try {
+        setDscrt(await fetchTokenBalance(connection.client, await getPermit(address)));
+      } catch (e) {
+        if (!quiet) toast.show("error", readable(e));
+      } finally {
+        setRevealing(false);
+      }
+    },
+    [connection, address, toast],
+  );
+
+  /*
+   * Reveal without being asked, once a permit exists.
+   *
+   * The button is there so that opening this panel never triggers a signature prompt — and
+   * with a permit already signed, no prompt is possible. Making somebody click it anyway
+   * meant asking permission that had already been given, on every reload, for a query that
+   * costs nothing.
+   *
+   * Guarded per address rather than left to the effect's dependencies: a re-render must not
+   * turn one balance query into several.
+   */
+  const autoRevealed = useRef<string | null>(null);
+  useEffect(() => {
     if (!connection || !address) return;
-    setRevealing(true);
-    try {
-      setDscrt(await fetchTokenBalance(connection.client, await getPermit(address)));
-    } catch (e) {
-      toast.show("error", readable(e));
-    } finally {
-      setRevealing(false);
-    }
-  };
+    if (!hasPermit(address)) return;
+    if (autoRevealed.current === address) return;
+    autoRevealed.current = address;
+    void reveal(true);
+  }, [connection, address, reveal]);
 
   if (!address) return null;
 
@@ -206,7 +239,13 @@ export function AccountDrawer({ onClose }: { onClose: () => void }) {
                     <span className="hint num">≈ {fromMicro(Number(dscrt) * rate, 2)} SCRT</span>
                   </>
                 ) : (
-                  <button className="mini" onClick={reveal} disabled={revealing}>
+                  <button
+                    className="mini"
+                    // Wrapped, not `onClick={reveal}` — that hands the click event in as
+                    // `quiet` and silences the very errors this click is asking to see.
+                    onClick={() => void reveal()}
+                    disabled={revealing}
+                  >
                     {revealing ? <Spinner size={11} /> : null} Reveal
                   </button>
                 )}
