@@ -54,7 +54,10 @@ export function LineChart({
     // axis running to 2.0, which reads as though it might double at any moment.
     const flat = rawMax - rawMin < Math.abs(rawMax) * 1e-9;
     const pad = flat ? Math.abs(rawMax) * 0.001 || 1 : (rawMax - rawMin) * 0.12;
-    const min = zeroBased ? 0 : rawMin - pad;
+    // Every series here is a quantity — a balance, a supply, a rate — and none can be
+    // negative. Padding a wide range downward put the axis floor below zero and invited a
+    // reader to wonder what a negative exchange rate would mean.
+    const min = zeroBased ? 0 : Math.max(0, rawMin - pad);
     const max = rawMax + pad;
     const span = max - min || 1;
 
@@ -175,10 +178,13 @@ export function LineChart({
 }
 
 export interface BarDatum {
+  /** Used as the key, and as the label when nothing richer is supplied. */
   label: string;
   value: number;
   display: string;
   note?: string;
+  /** A label with its own structure — an identity rather than a string. */
+  render?: React.ReactNode;
 }
 
 /**
@@ -196,11 +202,13 @@ export function BarList({ data, max }: { data: BarDatum[]; max?: number }) {
     <div className="stack" style={{ gap: "var(--s-4)" }}>
       {data.map((d) => (
         <div key={d.label}>
-          <div className="row" style={{ marginBottom: 6, minHeight: 0 }}>
-            <span className="k num" title={d.label} style={{ fontSize: 13 }}>
-              {d.label}
-              {d.note && <span className="faint"> · {d.note}</span>}
-            </span>
+          <div className="row" style={{ marginBottom: 8, minHeight: 0 }}>
+            {d.render ?? (
+              <span className="k num" title={d.label} style={{ fontSize: 13 }}>
+                {d.label}
+                {d.note && <span className="faint"> · {d.note}</span>}
+              </span>
+            )}
             <span className="v num">{d.display}</span>
           </div>
           <svg className="chart" viewBox="0 0 1000 6" height={6} preserveAspectRatio="none">
