@@ -13,10 +13,11 @@ use cosmwasm_std::{
     WasmQuery,
 };
 
-use lst_core::contract::{execute, instantiate, query};
+use lst_core::contract::{execute, instantiate, migrate, query};
 use lst_core::error::ContractError;
 use lst_types::core::msg::{
-    ExecuteAnswer, ExecuteMsg, InstantiateMsg, ManagerMsg, QueryAnswer, QueryMsg, ReceiveHookMsg,
+    ExecuteAnswer, ExecuteMsg, InstantiateMsg, ManagerMsg, MigrateMsg, QueryAnswer, QueryMsg,
+    ReceiveHookMsg,
 };
 use lst_types::core::types::{
     ManagerLimits, ProtocolParams, RedelegateStep, ValidatorInit, WindowState,
@@ -196,9 +197,19 @@ fn chain_confirms_delegations(deps: &mut Deps, env: &Env) {
 
 /// The id of the window currently accepting requests.
 fn open_window_id(deps: cosmwasm_std::Deps, env: Env) -> u64 {
-    let answer: QueryAnswer =
-        from_binary(&query(deps, env, QueryMsg::Windows { state: Some(WindowState::Open), start_after: None, limit: None }).unwrap())
-            .unwrap();
+    let answer: QueryAnswer = from_binary(
+        &query(
+            deps,
+            env,
+            QueryMsg::Windows {
+                state: Some(WindowState::Open),
+                start_after: None,
+                limit: None,
+            },
+        )
+        .unwrap(),
+    )
+    .unwrap();
     match answer {
         QueryAnswer::Windows { windows } => windows[0].id,
         other => panic!("unexpected answer {other:?}"),
@@ -207,8 +218,9 @@ fn open_window_id(deps: cosmwasm_std::Deps, env: Env) -> u64 {
 
 /// Occupy every validator's unbonding entry slots, so nothing can be undelegated.
 fn fill_entry_slots(deps: &mut Deps) {
-    let mut set: Vec<lst_types::core::types::ValidatorEntry> =
-        lst_core::state::VALIDATORS.load(deps.as_mut().storage).unwrap();
+    let mut set: Vec<lst_types::core::types::ValidatorEntry> = lst_core::state::VALIDATORS
+        .load(deps.as_mut().storage)
+        .unwrap();
     for entry in set.iter_mut() {
         entry.active_unbond_entries = 6;
     }
@@ -266,13 +278,7 @@ fn an_oversized_allowlist_is_rejected_because_users_would_pay_for_it() {
         .map(|i| format!("secretvaloper1padding{i:04}"))
         .collect();
 
-    let err = instantiate(
-        deps.as_mut(),
-        mock_env(),
-        mock_info(DEPLOYER, &[]),
-        msg,
-    )
-    .unwrap_err();
+    let err = instantiate(deps.as_mut(), mock_env(), mock_info(DEPLOYER, &[]), msg).unwrap_err();
 
     assert!(
         matches!(
@@ -852,7 +858,10 @@ fn sync_lowers_the_exchange_rate_after_a_slashing() {
         from_binary(&query(deps.as_ref(), env, QueryMsg::ExchangeRate {}).unwrap()).unwrap();
 
     match answer {
-        QueryAnswer::ExchangeRate { rate, is_unattended } => {
+        QueryAnswer::ExchangeRate {
+            rate,
+            is_unattended,
+        } => {
             assert!(!is_unattended);
             assert_eq!(
                 rate,
@@ -924,7 +933,9 @@ fn a_partial_sync_does_not_claim_the_cache_is_fresh() {
     let answer: QueryAnswer =
         from_binary(&query(deps.as_ref(), env.clone(), QueryMsg::State {}).unwrap()).unwrap();
     match answer {
-        QueryAnswer::State(state) => assert!(state.is_unattended, "still stale after a partial sweep"),
+        QueryAnswer::State(state) => {
+            assert!(state.is_unattended, "still stale after a partial sweep")
+        }
         other => panic!("unexpected answer {other:?}"),
     }
 
@@ -1365,10 +1376,9 @@ fn a_deposit_closes_an_overdue_window_on_its_way_past() {
         "the overdue window should have closed and a fresh one opened"
     );
     assert!(
-        res.messages.iter().any(|m| matches!(
-            &m.msg,
-            CosmosMsg::Staking(StakingMsg::Undelegate { .. })
-        )),
+        res.messages
+            .iter()
+            .any(|m| matches!(&m.msg, CosmosMsg::Staking(StakingMsg::Undelegate { .. }))),
         "closing the window should have undelegated what it owed"
     );
 }
@@ -2013,7 +2023,11 @@ fn the_fee_does_not_depend_on_whether_anybody_synced_first() {
         alone, after_sync,
         "the fee moved because somebody ran a sync first: {alone} against {after_sync}"
     );
-    assert_eq!(alone, Uint128::new(73_260), "and it is still the right figure");
+    assert_eq!(
+        alone,
+        Uint128::new(73_260),
+        "and it is still the right figure"
+    );
 }
 
 #[test]
@@ -2192,4 +2206,94 @@ fn sync_is_permissionless() {
         ExecuteMsg::Sync { limit: None },
     )
     .is_ok());
+}
+
+/// The migration moves the ceiling, and only the ceiling.
+///
+/// This is the shape every rule change takes now that the network owns the code: a figure
+/// compiled into a version, approved by a vote, applied by a migration nobody can
+/// parameterise. So the test is as much about what stays put as what moves — a migration
+/// that quietly raised the *fee* while raising the ceiling would be taking money the
+/// proposal never mentioned.
+#[test]
+fn the_migration_raises_the_ceiling_without_touching_the_fee() {
+    let (mut deps, env) = bootstrapped();
+
+    manager_msg(
+        &mut deps,
+        &env,
+        MANAGER,
+        ManagerMsg::SetPerformanceFee { bps: 1_000 },
+    )
+    .unwrap();
+
+    // Before: the old ceiling binds.
+    let err = manager_msg(
+        &mut deps,
+        &env,
+        MANAGER,
+        ManagerMsg::SetPerformanceFee { bps: 1_001 },
+    )
+    .unwrap_err();
+    assert!(
+        matches!(err, ContractError::FeeTooHigh { max: 1_000, .. }),
+        "got {err:?}"
+    );
+
+    let before = config_of(&deps, &env);
+    migrate(deps.as_mut(), env.clone(), MigrateMsg {}).unwrap();
+    let after = config_of(&deps, &env);
+
+    assert_eq!(after.limits.max_performance_fee_bps, 1_500);
+    assert_eq!(
+        after.params.performance_fee_bps, before.params.performance_fee_bps,
+        "the migration must not move the fee itself — that stays the manager's act"
+    );
+    assert_eq!(after.manager, before.manager, "manager must survive");
+    assert_eq!(after.treasury, before.treasury, "treasury must survive");
+    assert_eq!(
+        after.limits.max_validator_weight_bps, before.limits.max_validator_weight_bps,
+        "the other ceiling was not on the ballot"
+    );
+
+    // After: the new ceiling binds, and it binds.
+    manager_msg(
+        &mut deps,
+        &env,
+        MANAGER,
+        ManagerMsg::SetPerformanceFee { bps: 1_500 },
+    )
+    .unwrap();
+    let err = manager_msg(
+        &mut deps,
+        &env,
+        MANAGER,
+        ManagerMsg::SetPerformanceFee { bps: 1_501 },
+    )
+    .unwrap_err();
+    assert!(
+        matches!(err, ContractError::FeeTooHigh { max: 1_500, .. }),
+        "got {err:?}"
+    );
+}
+
+/// Running it twice is not running it twice as hard.
+///
+/// A migration can be replayed — a later proposal naming the same code id would do it — so
+/// the ceiling must be assigned rather than accumulated.
+#[test]
+fn migrating_twice_lands_in_the_same_place() {
+    let (mut deps, env) = bootstrapped();
+
+    migrate(deps.as_mut(), env.clone(), MigrateMsg {}).unwrap();
+    migrate(deps.as_mut(), env.clone(), MigrateMsg {}).unwrap();
+
+    assert_eq!(config_of(&deps, &env).limits.max_performance_fee_bps, 1_500);
+}
+
+fn config_of(deps: &Deps, env: &Env) -> lst_types::core::types::ConfigResponse {
+    match from_binary(&query(deps.as_ref(), env.clone(), QueryMsg::Config {}).unwrap()).unwrap() {
+        QueryAnswer::Config(c) => c,
+        other => panic!("expected a config, got {other:?}"),
+    }
 }

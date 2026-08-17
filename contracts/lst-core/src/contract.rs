@@ -648,7 +648,11 @@ fn execute_bootstrap(
         })?))
 }
 
-fn execute_deposit(mut deps: DepsMut, env: Env, info: MessageInfo) -> Result<Response, ContractError> {
+fn execute_deposit(
+    mut deps: DepsMut,
+    env: Env,
+    info: MessageInfo,
+) -> Result<Response, ContractError> {
     let config = CONFIG.load(deps.storage)?;
     if config.paused {
         return Err(ContractError::Paused);
@@ -681,7 +685,9 @@ fn execute_deposit(mut deps: DepsMut, env: Env, info: MessageInfo) -> Result<Res
     let would_mint = pool
         .supply
         .checked_add(shares)
-        .map_err(|_| ContractError::Overflow { context: "supply cap" })?;
+        .map_err(|_| ContractError::Overflow {
+            context: "supply cap",
+        })?;
     if would_mint > Uint128::new(math::MAX_TOTAL_SUPPLY) {
         return Err(ContractError::CapExceeded {
             would_mint,
@@ -1510,13 +1516,44 @@ fn validate_params(params: &ProtocolParams) -> Result<(), ContractError> {
 /// Convenience constant for callers that want the rate's fixed-point scale.
 pub const EXCHANGE_RATE_SCALE: u128 = RATE_SCALE;
 
+/// The manager's fee ceiling this version installs.
+///
+/// A number, in the code, that the network votes on — which is the only shape a rule change
+/// can take here. `MigrateMsg` is empty on purpose: the proposal approves *which code*
+/// runs, while the admin supplies the migrate message, so a parameter here would let the
+/// relay pick a figure the network never saw. Writing it into the code is what makes the
+/// vote mean the thing it appears to mean.
+const MIGRATION_MAX_PERFORMANCE_FEE_BPS: u16 = 1_500;
+
 /// Code upgrade.
 ///
 /// Migration is authorised by the *contract admin*, which is chain-level state rather than
 /// anything this contract stores — so who may upgrade is decided outside this code
 /// entirely. That is deliberate: it is the one power that can rewrite every other rule,
 /// and it should not sit behind a flag the contract itself can flip.
+///
+/// This version raises the manager's fee ceiling to 15%. It does not raise the fee: that
+/// stays wherever the manager last set it, and moving it is a separate, visible act. The
+/// ceiling is the promise made to depositors, so it is the network's to move, and the fee
+/// is the manager's to set beneath it.
 #[entry_point]
-pub fn migrate(_deps: DepsMut, _env: Env, _msg: MigrateMsg) -> Result<Response, ContractError> {
-    Ok(Response::new().add_attribute("action", "migrate"))
+pub fn migrate(deps: DepsMut, _env: Env, _msg: MigrateMsg) -> Result<Response, ContractError> {
+    let mut config = CONFIG.load(deps.storage)?;
+    let previous = config.limits.max_performance_fee_bps;
+
+    config.limits.max_performance_fee_bps = MIGRATION_MAX_PERFORMANCE_FEE_BPS;
+
+    // Through the same gate an instantiate goes through, so this path cannot install a
+    // ceiling the compiled hard limit forbids. Re-running the migration is harmless: the
+    // value is assigned, not accumulated.
+    validate_limits(&config.limits)?;
+    CONFIG.save(deps.storage, &config)?;
+
+    Ok(Response::new()
+        .add_attribute("action", "migrate")
+        .add_attribute(
+            "max_performance_fee_bps",
+            config.limits.max_performance_fee_bps.to_string(),
+        )
+        .add_attribute("previous_max_performance_fee_bps", previous.to_string()))
 }

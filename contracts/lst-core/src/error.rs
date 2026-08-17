@@ -18,7 +18,6 @@ pub enum ContractError {
     #[error("derivative token is already registered")]
     TokenAlreadyRegistered,
 
-
     #[error("expected exactly one coin of denom {expected}")]
     WrongDenom { expected: String },
 

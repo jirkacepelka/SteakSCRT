@@ -205,5 +205,4 @@ mod tests {
         let c = cache(5_000);
         assert!(!c.is_unattended(4_000, 7_200));
     }
-
 }

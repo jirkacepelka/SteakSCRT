@@ -13,13 +13,15 @@
 use cosmwasm_std::Uint128;
 use proptest::prelude::*;
 
-use lst_core::math::{assets_for_shares, exchange_rate, shares_for_deposit, PoolTotals, RATE_SCALE};
+use lst_core::math::{
+    assets_for_shares, exchange_rate, shares_for_deposit, PoolTotals, RATE_SCALE,
+};
 
 /// Amounts spanning dust to far more SCRT than will ever exist.
 fn amount() -> impl Strategy<Value = u128> {
     prop_oneof![
-        1u128..1_000,                       // dust, where rounding bites hardest
-        1_000u128..1_000_000_000_000,       // ordinary balances
+        1u128..1_000,                                // dust, where rounding bites hardest
+        1_000u128..1_000_000_000_000,                // ordinary balances
         1_000_000_000_000u128..u128::from(u64::MAX), // absurd, but must not panic
     ]
 }
