@@ -14,12 +14,22 @@ export interface TaskOutcome {
   task: string;
   did: "nothing" | "work";
   detail: string;
+  /**
+   * When this task next has something to do, in epoch milliseconds.
+   *
+   * The window tasks do not run on a cadence the operator invents — the contract publishes
+   * the exact second each one falls due, so the keeper can wait for that moment instead of
+   * polling for it. Absent when nothing is pending, which means nothing can fall due until
+   * a user transaction creates it, and anything so created is days away.
+   */
+  nextDue?: number;
 }
 
-const nothing = (task: string, detail: string): TaskOutcome => ({
+const nothing = (task: string, detail: string, nextDue?: number): TaskOutcome => ({
   task,
   did: "nothing",
   detail,
+  nextDue,
 });
 
 /**
@@ -110,7 +120,11 @@ export async function advanceWindow(keeper: Keeper): Promise<TaskOutcome> {
   const now = Math.floor(Date.now() / 1000);
   if (now < open.closes_at) {
     const mins = Math.ceil((open.closes_at - now) / 60);
-    return nothing("advance-window", `window ${open.id} closes in ${mins} min`);
+    return nothing(
+      "advance-window",
+      `window ${open.id} closes in ${mins} min`,
+      open.closes_at * 1000,
+    );
   }
 
   const result = await keeper.execute({ advance_window: {} });
@@ -135,6 +149,7 @@ export async function collectMatured(
     return nothing(
       "collect-matured",
       next ? `next matures in ${Math.ceil((next - now) / 3600)} h` : "nothing unbonding",
+      next === undefined ? undefined : next * 1000,
     );
   }
 

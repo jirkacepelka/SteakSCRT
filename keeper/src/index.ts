@@ -51,9 +51,16 @@ function logOutcome(outcome: TaskOutcome) {
  * Deliberately not a cron: the keeper may be restarted at any time, and a schedule that
  * depends on wall-clock alignment would either double up or skip a slot on every restart.
  * Elapsed time since the last successful run is restart-safe.
+ *
+ * The interval is a ceiling rather than a cadence. Where the chain publishes the second a
+ * job actually falls due — a window's `closes_at`, a maturity date — `mark` is given that
+ * deadline and the job wakes for it instead of being discovered up to an interval late.
+ * The ceiling still applies, because a user transaction can create work the last check had
+ * no way to see.
  */
 class Schedule {
   private lastRun = 0;
+  private deadline = Number.POSITIVE_INFINITY;
   private readonly intervalMs: number;
 
   constructor(intervalMs: number) {
@@ -61,19 +68,29 @@ class Schedule {
   }
 
   due(now: number): boolean {
-    return now - this.lastRun >= this.intervalMs;
+    return now >= Math.min(this.lastRun + this.intervalMs, this.deadline);
   }
 
-  mark(now: number) {
+  /** Record a run. `deadline` is epoch ms; omitting it falls back to the interval alone. */
+  mark(now: number, deadline?: number) {
     this.lastRun = now;
+    this.deadline = deadline ?? Number.POSITIVE_INFINITY;
   }
+}
+
+/** The earliest real deadline among a set of outcomes, if any of them named one. */
+function soonest(outcomes: TaskOutcome[]): number | undefined {
+  const dates = outcomes
+    .map((o) => o.nextDue)
+    .filter((d): d is number => typeof d === "number");
+  return dates.length === 0 ? undefined : Math.min(...dates);
 }
 
 async function pass(
   keeper: Keeper,
   config: KeeperConfig,
   memory: Memory,
-  schedules: { sync: Schedule; compound: Schedule; window: Schedule },
+  schedules: { compound: Schedule; window: Schedule },
 ): Promise<"healthy" | "unhealthy" | void> {
   const now = Date.now();
 
@@ -89,23 +106,36 @@ async function pass(
     return findings.some((f) => f.severity === "alert") ? "unhealthy" : "healthy";
   }
 
-  const stale = findings.some((f) => f.check === "freshness" && f.severity !== "ok");
-  if (stale || schedules.sync.due(now)) {
-    logOutcome(await sync(keeper, config));
-    schedules.sync.mark(now);
-  }
-
   if (schedules.window.due(now)) {
-    logOutcome(await advanceWindow(keeper));
-    logOutcome(await collectMatured(keeper, config));
-    schedules.window.mark(now);
+    const outcomes = [await advanceWindow(keeper), await collectMatured(keeper, config)];
+    for (const outcome of outcomes) logOutcome(outcome);
+    schedules.window.mark(now, soonest(outcomes));
   }
 
-  if (schedules.compound.due(now)) {
-    logOutcome(await compound(keeper, config));
+  /*
+   * Compound carries the cache.
+   *
+   * There is no separate sync pass because there is nothing left for one to do: the
+   * contract's `Compound` re-reads every validator's real delegation and restamps
+   * `last_sync_time` on a completed sweep, harvest or no harvest. Two jobs were paying
+   * twice for one of them.
+   */
+  const stale = findings.some((f) => f.check === "freshness" && f.severity !== "ok");
+  if (stale || schedules.compound.due(now)) {
+    const outcome = await compound(keeper, config);
+    logOutcome(outcome);
     schedules.compound.mark(now);
-    // Compounding rewrites the totals, so the next sync can wait a full interval.
-    schedules.sync.mark(now);
+
+    /*
+     * Fall back to a plain sync if that failed and left the figures stale.
+     *
+     * Compound is the larger transaction — it withdraws, delegates and mints — so it has
+     * more ways to fail than a sync does. When it does, the published rate should not be
+     * held hostage to whatever broke the harvest.
+     */
+    if (stale && outcome.detail.startsWith("failed")) {
+      logOutcome(await sync(keeper, config));
+    }
   }
 }
 
@@ -122,7 +152,6 @@ async function main() {
 
   const memory: Memory = {};
   const schedules = {
-    sync: new Schedule(config.syncIntervalMs),
     compound: new Schedule(config.compoundIntervalMs),
     window: new Schedule(config.windowIntervalMs),
   };

@@ -15,11 +15,14 @@ export interface KeeperConfig {
   contract: string;
   contractCodeHash: string;
 
-  /** How often to refresh cached totals. */
-  syncIntervalMs: number;
-  /** How often to harvest and restake rewards. */
+  /** How often to harvest and restake rewards. Also what keeps the cached totals current. */
   compoundIntervalMs: number;
-  /** How often to check whether a window can close or a matured one can be collected. */
+  /**
+   * The longest the keeper will go without asking whether a window is due.
+   *
+   * A ceiling, not a cadence: when the chain reports a deadline the keeper wakes for it
+   * exactly, and this only bounds the case where nothing is pending at all.
+   */
   windowIntervalMs: number;
 
   /** Validators handled per paginated call. */
@@ -67,16 +70,24 @@ export function loadConfig(argv: string[] = process.argv.slice(2)): KeeperConfig
     contract: required("LST_CORE_ADDRESS"),
     contractCodeHash: required("LST_CORE_CODE_HASH"),
 
-    // No longer what stands between a user and transacting — deposits and withdrawals
-    // refresh the cache themselves — but it still keeps the published rate and the
-    // validator figures current on a protocol nobody happens to be using, and it is what
-    // `sync_stale_after_secs` measures the keeper against.
-    syncIntervalMs: duration("SYNC_INTERVAL", 30 * 60_000),
-    // Rewards accrue every block; compounding more often than a few hours costs more gas
-    // than it earns.
-    compoundIntervalMs: duration("COMPOUND_INTERVAL", 6 * 3_600_000),
-    // Windows close on a multi-day cadence. Checking often is cheap because the contract
-    // refuses early closes, so a no-op costs one failed simulation.
+    /*
+     * Hourly, and it is the only thing on a clock.
+     *
+     * `Compound` re-reads every validator from the staking module and restamps
+     * `last_sync_time` whether or not it found anything to harvest, so it does everything
+     * `Sync` did and harvests as well. Running both was paying twice for one of them: at
+     * the old cadence that was 4 compounds and 48 syncs a day, where 24 compounds cover
+     * the same ground for fewer transactions.
+     *
+     * Hourly is not about yield. Rewards accrue continuously and harvesting only moves
+     * them, so compounding 24 times a day rather than 4 is worth a rounding error on the
+     * APY. What it buys is a published exchange rate that is never more than an hour
+     * behind the chain, for a gas bill that is now small enough not to argue with.
+     */
+    compoundIntervalMs: duration("COMPOUND_INTERVAL", 3_600_000),
+    // Not a cadence — see `windowIntervalMs`. Windows fall due on a multi-day clock the
+    // contract publishes, so the keeper waits for the stated moment and this only bounds
+    // how long it will sit without asking at all.
     windowIntervalMs: duration("WINDOW_INTERVAL", 15 * 60_000),
 
     /*
