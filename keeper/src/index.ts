@@ -69,11 +69,12 @@ class Schedule {
   }
 }
 
-async function pass(keeper: Keeper, config: KeeperConfig, memory: Memory, schedules: {
-  sync: Schedule;
-  compound: Schedule;
-  window: Schedule;
-}) {
+async function pass(
+  keeper: Keeper,
+  config: KeeperConfig,
+  memory: Memory,
+  schedules: { sync: Schedule; compound: Schedule; window: Schedule },
+): Promise<"healthy" | "unhealthy" | void> {
   const now = Date.now();
 
   // Health first: if the cache is stale the sync schedule is beside the point, and if the
@@ -81,7 +82,12 @@ async function pass(keeper: Keeper, config: KeeperConfig, memory: Memory, schedu
   const findings = await runChecks(keeper, memory, /* entryCeiling */ 6);
   report(findings);
 
-  if (config.checkOnly) return;
+  // A check run reports through its exit code as well as its logs, so a container health
+  // probe or a cron job can tell "ran" from "ran and everything is fine". Without it the
+  // keeper looked healthy while sitting on an account too empty to pay for anything.
+  if (config.checkOnly) {
+    return findings.some((f) => f.severity === "alert") ? "unhealthy" : "healthy";
+  }
 
   const stale = findings.some((f) => f.check === "freshness" && f.severity !== "ok");
   if (stale || schedules.sync.due(now)) {
@@ -122,7 +128,8 @@ async function main() {
   };
 
   if (config.once || config.checkOnly) {
-    await pass(keeper, config, memory, schedules);
+    const verdict = await pass(keeper, config, memory, schedules);
+    if (verdict === "unhealthy") process.exitCode = 1;
     return;
   }
 

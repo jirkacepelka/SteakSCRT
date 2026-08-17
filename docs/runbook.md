@@ -47,7 +47,27 @@ and the performance fee is not taken. Deposits, withdrawals and claims all still
 do not have to — the tasks are idempotent and two keepers running at once is harmless — but
 you will burn double the gas for nothing.
 
-Fix:
+### Running it continuously
+
+A home server is a legitimate place for this. Losing the keeper costs yield, not access,
+so home-grade uptime is a proportionate answer — and it keeps the key off a third party's
+machine. Anything with Docker will do:
+
+```bash
+cp keeper/.env.example keeper/.env      # then fill it in
+docker compose -f keeper/docker-compose.yml up -d
+```
+
+The container runs as a non-root user, writes nothing, and listens on no port — it needs
+outbound HTTPS and a funded key, and nothing else. Its health probe is
+`--check-only`, which exits non-zero when an invariant fails, so an empty gas account shows
+up as unhealthy rather than as a container that looks fine and quietly does nothing.
+
+Because every task is idempotent and permissionless, a second keeper anywhere else is
+harmless and needs no coordination with the first. Two running at once waste some gas and
+nothing more, which makes redundancy a decision rather than a project.
+
+### Starting one by hand
 
 ```bash
 $env:CHAIN_ID="pulsar-3"
